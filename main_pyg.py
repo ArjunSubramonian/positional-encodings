@@ -8,6 +8,22 @@ from tqdm import tqdm
 import argparse
 import time
 import numpy as np
+import random
+
+torch.manual_seed(0)
+np.random.seed(0)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(0)
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+seed = 0
+set_seed(seed)
 
 ### importing OGB
 from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
@@ -106,11 +122,11 @@ def main():
     ### automatic evaluator. takes dataset name as input
     evaluator = Evaluator(args.dataset)
 
-    # train_loader = DataLoader(dataset[split_idx["train"]], batch_size=args.batch_size, shuffle=True, num_workers = args.num_workers)
-    train_loader = DataLoader(dataset[:int(0.8 * len(dataset))], batch_size=args.batch_size, shuffle=True, num_workers = args.num_workers)
-    # valid_loader = DataLoader(dataset[split_idx["valid"]], batch_size=args.batch_size, shuffle=False, num_workers = args.num_workers)
-    valid_loader = DataLoader(dataset[int(0.8 * len(dataset)):], batch_size=args.batch_size, shuffle=False, num_workers = args.num_workers)
-    # test_loader = DataLoader(dataset[split_idx["test"]], batch_size=args.batch_size, shuffle=False, num_workers = args.num_workers)
+    train_loader = DataLoader(dataset[split_idx["train"]], batch_size=args.batch_size, shuffle=False, drop_last=True, num_workers = args.num_workers)
+    # train_loader = DataLoader(dataset[:int(0.8 * len(dataset))], batch_size=args.batch_size, shuffle=False, num_workers = args.num_workers)
+    # valid_loader = DataLoader(dataset[split_idx["valid"]], batch_size=args.batch_size, shuffle=False, drop_last=True, num_workers = args.num_workers)
+    # valid_loader = DataLoader(dataset[int(0.8 * len(dataset)):], batch_size=args.batch_size, shuffle=False, num_workers = args.num_workers)
+    test_loader = DataLoader(dataset[split_idx["test"]], batch_size=args.batch_size, shuffle=False, drop_last=True, num_workers = args.num_workers)
 
     if args.gnn == 'gin':
         model = GNN(gnn_type = 'gin', num_tasks = dataset.num_tasks, num_layer = args.num_layer, emb_dim = args.emb_dim, drop_ratio = args.drop_ratio, virtual_node = False).to(device)
@@ -136,26 +152,26 @@ def main():
 
         print('Evaluating...')
         train_perf = eval(model, device, train_loader, evaluator)
-        valid_perf = eval(model, device, valid_loader, evaluator)
-        # test_perf = eval(model, device, test_loader, evaluator)
+        # valid_perf = eval(model, device, valid_loader, evaluator)
+        test_perf = eval(model, device, test_loader, evaluator)
 
         # print({'Train': train_perf, 'Validation': valid_perf, 'Test': test_perf})
-        print({'Train': train_perf, 'Validation': valid_perf})
+        print({'Train': train_perf, 'Test': test_perf})
 
         train_curve.append(train_perf[dataset.eval_metric])
-        valid_curve.append(valid_perf[dataset.eval_metric])
-        # test_curve.append(test_perf[dataset.eval_metric])
+        # valid_curve.append(valid_perf[dataset.eval_metric])
+        test_curve.append(test_perf[dataset.eval_metric])
 
     if 'classification' in dataset.task_type:
-        best_val_epoch = np.argmax(np.array(valid_curve))
+        # best_val_epoch = np.argmax(np.array(valid_curve))
         best_train = max(train_curve)
     else:
         best_val_epoch = np.argmin(np.array(valid_curve))
         best_train = min(train_curve)
 
     print('Finished training!')
-    print('Best validation score: {}'.format(valid_curve[best_val_epoch]))
-    # print('Test score: {}'.format(test_curve[best_val_epoch]))
+    # print('Best validation score: {}'.format(valid_curve[best_val_epoch]))
+    print('Test score: {}'.format(test_curve[best_val_epoch]))
 
     if not args.filename == '':
         torch.save({'Val': valid_curve[best_val_epoch], 'Test': test_curve[best_val_epoch], 'Train': train_curve[best_val_epoch], 'BestTrain': best_train}, args.filename)
