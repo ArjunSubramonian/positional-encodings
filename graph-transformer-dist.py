@@ -278,7 +278,7 @@ def compute_mutual_shortest_distances(d):
 # %%
 args.dataset = 'ogbg-moltox21'
 args.n_classes = 12
-args.batch_size = 32
+args.batch_size = 8
 args.lr = 0.001
 args.graph_pooling = 'mean'
 args.proj_mode = 'nonlinear'
@@ -375,16 +375,16 @@ def train(rank, num_epochs, world_size):
     )
     
     if args.split == 'scaffold':
-        train_loader = DataLoader(dataset[split_idx["train"]], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=sampler, pin_memory=True)
-        test_loader = DataLoader(dataset[split_idx["test"]], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=sampler, pin_memory=True)
+        train_loader = DataLoader(dataset[split_idx["train"]], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=sampler)
+        test_loader = DataLoader(dataset[split_idx["test"]], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=sampler)
     elif args.split == '80-20':
-        train_loader = DataLoader(dataset[:int(0.8 * len(dataset))], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=sampler, pin_memory=True)
-        test_loader = DataLoader(dataset[int(0.8 * len(dataset)):], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=sampler, pin_memory=True)
+        train_loader = DataLoader(dataset[:int(0.8 * len(dataset))], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=sampler)
+        test_loader = DataLoader(dataset[int(0.8 * len(dataset)):], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=sampler)
 
     model = GraphTransformerModel(args.n_classes, args.graph_layers, args.embed_dim, args.ff_embed_dim, args.num_heads, args.dropout, args.relation_type, args.max_vocab).cuda(rank)
     model = DistributedDataParallel(model, device_ids=[rank])
     batch_device = torch.device('cuda:'+ str(rank) if torch.cuda.is_available() else 'cpu')
-
+    
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = torch.nn.BCEWithLogitsLoss(reduction = "mean")
     evaluator = Evaluator(name=args.dataset)
@@ -398,7 +398,9 @@ def train(rank, num_epochs, world_size):
 
         loss_epoch = 0
         for idx, batch in enumerate(train_loader):
-            z = model(batch.to(batch_device, non_blocking=True))
+            print(rank, idx, '/', len(train_loader), batch)
+            batch = batch.to(batch_device, non_blocking=True)
+            z = model(batch)
 
             y = batch.y.float()
             is_valid = ~torch.isnan(y)
@@ -423,7 +425,8 @@ def train(rank, num_epochs, world_size):
             y_true = []
             y_scores = []
             for idx, batch in enumerate(test_loader):
-                z = model(batch.to(batch_device, non_blocking=True))
+                batch = batch.to(batch_device, non_blocking=True)
+                z = model(batch)
 
                 y = batch.y.float()
                 y_true.append(y)
@@ -445,6 +448,7 @@ def train(rank, num_epochs, world_size):
         
 WORLD_SIZE = torch.cuda.device_count()
 if __name__=="__main__":
+    # print(torch.cuda.memory_summary())
     mp.spawn(
         train, args=(args.num_epochs, WORLD_SIZE),
         nprocs=WORLD_SIZE, join=True
