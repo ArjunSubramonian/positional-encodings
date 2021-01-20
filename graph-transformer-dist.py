@@ -30,6 +30,7 @@ import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel
 import os
+os.environ['CUDA_VISIBLE_DEVICES']='0,2,3,6'
 
 parser = argparse.ArgumentParser(description='PyTorch implementation of relative positional encodings and relation-aware self-attention for graph Transformers')
 args = parser.parse_args("")
@@ -360,7 +361,7 @@ def train(rank, num_epochs, world_size):
     if rank == 0:
         print("Loading data...")
         print("dataset: {} ".format(args.dataset))
-        dataset = PygGraphPropPredDataset(name=args.dataset, pre_transform=args.pre_transform).shuffle()
+        dataset = PygGraphPropPredDataset(name=args.dataset, pre_transform=args.pre_transform)
     dist.barrier()
     print("Loading data...")
     print("dataset: {} ".format(args.dataset))
@@ -369,17 +370,27 @@ def train(rank, num_epochs, world_size):
         f"{rank + 1}/{world_size} process initialized.\n"
     )
     
-    split_idx = dataset.get_idx_split()
-    sampler = DistributedSampler(
-        dataset, rank=rank, num_replicas=world_size, shuffle=False
-    )
-    
     if args.split == 'scaffold':
-        train_loader = DataLoader(dataset[split_idx["train"]], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=sampler)
-        test_loader = DataLoader(dataset[split_idx["test"]], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=sampler)
+        split_idx = dataset.get_idx_split()
+        train_sampler = DistributedSampler(
+            dataset[split_idx["train"]], rank=rank, num_replicas=world_size, shuffle=False
+        )
+        test_sampler = DistributedSampler(
+            dataset[split_idx["test"]], rank=rank, num_replicas=world_size, shuffle=False
+        )
+        
+        train_loader = DataLoader(dataset[split_idx["train"]], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=train_sampler)
+        test_loader = DataLoader(dataset[split_idx["test"]], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=test_sampler)
     elif args.split == '80-20':
-        train_loader = DataLoader(dataset[:int(0.8 * len(dataset))], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=sampler)
-        test_loader = DataLoader(dataset[int(0.8 * len(dataset)):], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=sampler)
+        train_sampler = DistributedSampler(
+            dataset[:int(0.8 * len(dataset))], rank=rank, num_replicas=world_size, shuffle=False
+        )
+        test_sampler = DistributedSampler(
+            dataset[int(0.8 * len(dataset)):], rank=rank, num_replicas=world_size, shuffle=False
+        )
+        
+        train_loader = DataLoader(dataset[:int(0.8 * len(dataset))], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=train_sampler)
+        test_loader = DataLoader(dataset[int(0.8 * len(dataset)):], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=test_sampler)
 
     model = GraphTransformerModel(args.n_classes, args.graph_layers, args.embed_dim, args.ff_embed_dim, args.num_heads, args.dropout, args.relation_type, args.max_vocab).cuda(rank)
     model = DistributedDataParallel(model, device_ids=[rank])
@@ -398,7 +409,7 @@ def train(rank, num_epochs, world_size):
 
         loss_epoch = 0
         for idx, batch in enumerate(train_loader):
-            print(rank, idx, '/', len(train_loader), batch)
+            # print(rank, idx, '/', len(train_loader), batch)
             batch = batch.to(batch_device, non_blocking=True)
             z = model(batch)
 
@@ -448,7 +459,6 @@ def train(rank, num_epochs, world_size):
         
 WORLD_SIZE = torch.cuda.device_count()
 if __name__=="__main__":
-    # print(torch.cuda.memory_summary())
     mp.spawn(
         train, args=(args.num_epochs, WORLD_SIZE),
         nprocs=WORLD_SIZE, join=True
