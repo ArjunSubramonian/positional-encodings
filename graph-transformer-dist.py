@@ -16,6 +16,7 @@ from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
 
 from torch.nn import Parameter
 import math
+from tqdm import tqdm
 
 from networkx.algorithms.shortest_paths.generic import shortest_path 
 from torch_geometric.utils.convert import to_networkx
@@ -293,7 +294,7 @@ args.relation_type = 'shortest_dist'
 args.pre_transform = compute_mutual_shortest_distances
 args.max_vocab = 12
 args.split = 'scaffold'
-args.num_epochs = 50
+args.num_epochs = 200
 
 
 # %%
@@ -396,10 +397,12 @@ def train(rank, num_epochs, world_size):
     model = DistributedDataParallel(model, device_ids=[rank])
     batch_device = torch.device('cuda:'+ str(rank) if torch.cuda.is_available() else 'cpu')
     
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 1000, eta_min=1e-6)
     criterion = torch.nn.BCEWithLogitsLoss(reduction = "mean")
     evaluator = Evaluator(name=args.dataset)
 
+    train_step = 1500
     for epoch in range(num_epochs):
         ############
         # TRAINING #
@@ -420,10 +423,14 @@ def train(rank, num_epochs, world_size):
             loss = criterion(z[is_valid], y[is_valid])
             loss.backward()
             optimizer.step()
+            train_step += 1
+            scheduler.step(train_step)
 
             loss_epoch += loss.detach().item()
 
-        print('Train loss:', loss_epoch / len(train_loader))
+        if rank == 0:
+            print('Epoch:', epoch)
+            print('Train loss:', loss_epoch / len(train_loader))
 
         ##############
         # EVALUATION #
@@ -444,9 +451,7 @@ def train(rank, num_epochs, world_size):
                 y_scores.append(z)
                 is_valid = ~torch.isnan(y)
 
-                optimizer.zero_grad()
                 loss = criterion(z[is_valid], y[is_valid])
-
                 loss_epoch += loss.detach().item()
 
             y_true = torch.cat(y_true, dim = 0)
@@ -454,8 +459,16 @@ def train(rank, num_epochs, world_size):
 
         input_dict = {"y_true": y_true, "y_pred": y_scores}
         result_dict = evaluator.eval(input_dict)
-        print('Test loss:', loss_epoch / len(test_loader))
-        print('Test ROC-AUC:', result_dict[args.eval_metric])
+        if rank == 0:
+            print('Test loss:', loss_epoch / len(test_loader))
+            print('Test ROC-AUC:', result_dict[args.eval_metric])
+            
+            print()
+        
+            torch.save(
+                model.state_dict(),
+                f'./models/model_{epoch}.pth'
+            )
         
 WORLD_SIZE = torch.cuda.device_count()
 if __name__=="__main__":
@@ -464,3 +477,5 @@ if __name__=="__main__":
         nprocs=WORLD_SIZE, join=True
     )
 
+
+# %%
