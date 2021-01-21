@@ -1,66 +1,11 @@
-#!/usr/bin/env python
-# coding: utf-8
-# %%
 import torch
 import torch.nn as nn
-import torch.nn.functional as F 
-import torch_geometric.transforms as T
-from torch import lgamma
-from torch_geometric.data import DataLoader
-from torch_scatter import scatter_mean
-import argparse
-import numpy as np
-import random
-import ogb
-from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
-
+import torch.nn.functional as F
 from torch.nn import Parameter
-import math
-from tqdm import tqdm
-
-from networkx.algorithms.shortest_paths.generic import shortest_path 
-from torch_geometric.utils.convert import to_networkx
-from torch_geometric.data import Data
-
 from ogb.graphproppred.mol_encoder import AtomEncoder
 from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool
 from torch_geometric.utils import to_dense_adj, to_dense_batch
 
-import torch.multiprocessing as mp
-import torch.distributed as dist
-from torch.utils.data.distributed import DistributedSampler
-from torch.nn.parallel import DistributedDataParallel
-import os
-os.environ['CUDA_VISIBLE_DEVICES']='0,2,3,6'
-
-parser = argparse.ArgumentParser(description='PyTorch implementation of relative positional encodings and relation-aware self-attention for graph Transformers')
-args = parser.parse_args("")
-args.device = 0
-args.device = torch.device('cuda:'+ str(args.device) if torch.cuda.is_available() else 'cpu')
-# args.device = torch.device('cpu')
-print("device:", args.device)
-# torch.cuda.set_device(args.device)
-
-torch.manual_seed(0)
-np.random.seed(0)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(0)
-
-def set_seed(seed):
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-seed = 0
-set_seed(seed)
-
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
-
-
-# %%
 class GraphTransformer(nn.Module):
 
     def __init__(self, layers, embed_dim, ff_embed_dim, num_heads, dropout, weights_dropout=True):
@@ -256,55 +201,13 @@ class RelationMultiheadAttention(nn.Module):
 
         return output
 
-
-# %%
-def compute_mutual_shortest_distances(d):
-    d_nx = to_networkx(d, to_undirected=True)
-    p = shortest_path(d_nx)
-    
-    sd_edge_index = torch.LongTensor(2, d.x.size(0) * d.x.size(0))
-    sd_edge_attr = torch.FloatTensor(d.x.size(0) * d.x.size(0), 1)
-    for i in range(d.x.size(0)):
-        for j in range(d.x.size(0)):
-            sd_edge_index[0][i * d.x.size(0) + j] = i
-            sd_edge_index[1][i * d.x.size(0) + j] = j
-            
-            if j in p[i]:
-                sd_edge_attr[i * d.x.size(0) + j] = len(p[i][j]) - 1
-            else:
-                sd_edge_attr[i * d.x.size(0) + j] = float("inf")
-        
-    return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, sd_edge_index=sd_edge_index, sd_edge_attr=sd_edge_attr)
-
-
-# %%
-args.dataset = 'ogbg-moltox21'
-args.n_classes = 12
-args.batch_size = 8
-args.lr = 0.001
-args.graph_pooling = 'mean'
-args.proj_mode = 'nonlinear'
-args.eval_metric = 'rocauc'
-args.embed_dim = 512
-args.ff_embed_dim = 1024
-args.num_heads = 8
-args.graph_layers = 4
-args.dropout = 0.2
-args.relation_type = 'shortest_dist'
-args.pre_transform = compute_mutual_shortest_distances
-args.max_vocab = 12
-args.split = 'scaffold'
-args.num_epochs = 200
-
-
-# %%
 class GraphTransformerModel(nn.Module):
 
-    def __init__(self, nclasses, layers, embed_dim, ff_embed_dim, num_heads, dropout, relation_type, max_vocab, weights_dropout=True):
+    def __init__(self, args):
         super(GraphTransformerModel, self).__init__()
         self.model_type = 'GraphTransformerModel'
-        self.encoder = AtomEncoder(emb_dim=embed_dim)
-        self.transformer = GraphTransformer(layers, embed_dim, ff_embed_dim, num_heads, dropout, weights_dropout)
+        self.encoder = AtomEncoder(emb_dim=args.embed_dim)
+        self.transformer = GraphTransformer(args.graph_layers, args.embed_dim, args.ff_embed_dim, args.num_heads, args.dropout, args.weights_dropout)
         
         #Different kind of graph pooling
         if args.graph_pooling == "sum":
@@ -317,15 +220,15 @@ class GraphTransformerModel(nn.Module):
             raise ValueError("Invalid graph pooling type.")
         
         self.task_pred = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim),
-            nn.BatchNorm1d(embed_dim),
+            nn.Linear(args.embed_dim, args.embed_dim),
+            nn.BatchNorm1d(args.embed_dim),
             nn.ReLU(),
-            nn.Linear(embed_dim, nclasses)
+            nn.Linear(args.embed_dim, args.n_classes)
         )
         
-        self.relation_type = relation_type
-        self.max_vocab = max_vocab
-        self.relation_encoder = nn.Embedding(max_vocab, embed_dim)
+        self.relation_type = args.relation_type
+        self.max_vocab = args.max_vocab
+        self.relation_encoder = nn.Embedding(args.max_vocab, args.embed_dim)
 
     def forward(self, src, src_mask=None):
         x, mask = to_dense_batch(self.encoder(src.x), batch=src.batch, fill_value=0)
@@ -347,135 +250,3 @@ class GraphTransformerModel(nn.Module):
         graph_pred = self.task_pred(graph_emb)
         
         return graph_pred
-
-
-# %%
-def init_process(rank, size, backend='gloo'):
-    """ Initialize the distributed environment. """
-    os.environ['MASTER_ADDR'] = '127.0.0.1'
-    os.environ['MASTER_PORT'] = '29500'
-    dist.init_process_group(backend, rank=rank, world_size=size)
-
-def train(rank, num_epochs, world_size):
-    init_process(rank, world_size)
-    
-    if rank == 0:
-        print("Loading data...")
-        print("dataset: {} ".format(args.dataset))
-        dataset = PygGraphPropPredDataset(name=args.dataset, pre_transform=args.pre_transform)
-    dist.barrier()
-    print("Loading data...")
-    print("dataset: {} ".format(args.dataset))
-    dataset = PygGraphPropPredDataset(name=args.dataset, pre_transform=args.pre_transform).shuffle()
-    print(
-        f"{rank + 1}/{world_size} process initialized.\n"
-    )
-    
-    if args.split == 'scaffold':
-        split_idx = dataset.get_idx_split()
-        train_sampler = DistributedSampler(
-            dataset[split_idx["train"]], rank=rank, num_replicas=world_size, shuffle=False
-        )
-        test_sampler = DistributedSampler(
-            dataset[split_idx["test"]], rank=rank, num_replicas=world_size, shuffle=False
-        )
-        
-        train_loader = DataLoader(dataset[split_idx["train"]], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=train_sampler)
-        test_loader = DataLoader(dataset[split_idx["test"]], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=test_sampler)
-    elif args.split == '80-20':
-        train_sampler = DistributedSampler(
-            dataset[:int(0.8 * len(dataset))], rank=rank, num_replicas=world_size, shuffle=False
-        )
-        test_sampler = DistributedSampler(
-            dataset[int(0.8 * len(dataset)):], rank=rank, num_replicas=world_size, shuffle=False
-        )
-        
-        train_loader = DataLoader(dataset[:int(0.8 * len(dataset))], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=train_sampler)
-        test_loader = DataLoader(dataset[int(0.8 * len(dataset)):], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=test_sampler)
-
-    model = GraphTransformerModel(args.n_classes, args.graph_layers, args.embed_dim, args.ff_embed_dim, args.num_heads, args.dropout, args.relation_type, args.max_vocab).cuda(rank)
-    model = DistributedDataParallel(model, device_ids=[rank])
-    batch_device = torch.device('cuda:'+ str(rank) if torch.cuda.is_available() else 'cpu')
-    
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 1000, eta_min=1e-6)
-    criterion = torch.nn.BCEWithLogitsLoss(reduction = "mean")
-    evaluator = Evaluator(name=args.dataset)
-
-    train_step = 1500
-    for epoch in range(num_epochs):
-        ############
-        # TRAINING #
-        ############
-
-        model.train()
-
-        loss_epoch = 0
-        for idx, batch in enumerate(train_loader):
-            # print(rank, idx, '/', len(train_loader), batch)
-            batch = batch.to(batch_device, non_blocking=True)
-            z = model(batch)
-
-            y = batch.y.float()
-            is_valid = ~torch.isnan(y)
-
-            optimizer.zero_grad()
-            loss = criterion(z[is_valid], y[is_valid])
-            loss.backward()
-            optimizer.step()
-            train_step += 1
-            scheduler.step(train_step)
-
-            loss_epoch += loss.detach().item()
-
-        if rank == 0:
-            print('Epoch:', epoch)
-            print('Train loss:', loss_epoch / len(train_loader))
-
-        ##############
-        # EVALUATION #
-        ##############
-
-        model.eval()
-
-        with torch.no_grad():
-            loss_epoch = 0
-            y_true = []
-            y_scores = []
-            for idx, batch in enumerate(test_loader):
-                batch = batch.to(batch_device, non_blocking=True)
-                z = model(batch)
-
-                y = batch.y.float()
-                y_true.append(y)
-                y_scores.append(z)
-                is_valid = ~torch.isnan(y)
-
-                loss = criterion(z[is_valid], y[is_valid])
-                loss_epoch += loss.detach().item()
-
-            y_true = torch.cat(y_true, dim = 0)
-            y_scores = torch.cat(y_scores, dim = 0)
-
-        input_dict = {"y_true": y_true, "y_pred": y_scores}
-        result_dict = evaluator.eval(input_dict)
-        if rank == 0:
-            print('Test loss:', loss_epoch / len(test_loader))
-            print('Test ROC-AUC:', result_dict[args.eval_metric])
-            
-            print()
-        
-            torch.save(
-                model.state_dict(),
-                f'./models/model_{epoch}.pth'
-            )
-        
-WORLD_SIZE = torch.cuda.device_count()
-if __name__=="__main__":
-    mp.spawn(
-        train, args=(args.num_epochs, WORLD_SIZE),
-        nprocs=WORLD_SIZE, join=True
-    )
-
-
-# %%
