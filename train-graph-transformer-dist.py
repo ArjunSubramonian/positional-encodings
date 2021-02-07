@@ -20,6 +20,9 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel
 import os
 
+import pytorch_warmup as warmup
+import datetime
+
 parser = argparse.ArgumentParser(description='PyTorch implementation of relative positional encodings and relation-aware self-attention for graph Transformers')
 args = parser.parse_args("")
 args.device = 0
@@ -55,10 +58,12 @@ args.graph_pooling = 'mean'
 args.proj_mode = 'nonlinear'
 args.eval_metric = 'rocauc'
 args.embed_dim = 512
-args.ff_embed_dim = 1024
+# args.ff_embed_dim = 1024
+args.ff_embed_dim = 512
 args.num_heads = 8
 args.graph_layers = 4
-args.dropout = 0.2
+# args.dropout = 0.2
+args.dropout = 0.4
 args.relation_type = 'shortest_dist'
 args.pre_transform = compute_mutual_shortest_distances
 args.max_vocab = 12
@@ -66,7 +71,6 @@ args.split = 'scaffold'
 args.num_epochs = 50
 args.weights_dropout = True
 args.grad_acc = 256
-args.writer = SummaryWriter(log_dir='runs/molhiv')
 
 
 # %%
@@ -114,10 +118,15 @@ def train(rank, num_epochs, world_size):
     batch_device = torch.device('cuda:'+ str(rank) if torch.cuda.is_available() else 'cpu')
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 1000, eta_min=1e-6)
+    num_steps = (len(train_loader) // args.grad_acc) * num_epochs # * world_size (not sure if this is necessary?)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_steps)
+    warmup_scheduler = warmup.UntunedLinearWarmup(optimizer)
     criterion = torch.nn.BCEWithLogitsLoss(reduction = "mean")
     evaluator = Evaluator(name=args.dataset)
 
+    if rank == 0:
+        args.writer = SummaryWriter(log_dir='runs/molhiv/' + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    
     for epoch in range(num_epochs):
         ############
         # TRAINING #
@@ -142,7 +151,8 @@ def train(rank, num_epochs, world_size):
             if (idx + 1) % args.grad_acc == 0:
                 optimizer.step()
                 optimizer.zero_grad()
-                # scheduler.step()
+                scheduler.step()
+                warmup_scheduler.dampen()
 
             loss_epoch += loss.detach().item()
         
@@ -193,7 +203,7 @@ def train(rank, num_epochs, world_size):
                 )
         
 if __name__=="__main__":
-    os.environ['CUDA_VISIBLE_DEVICES']='2,3,5,6,7'
+    os.environ['CUDA_VISIBLE_DEVICES']='1,2,3'
     WORLD_SIZE = torch.cuda.device_count()
     mp.spawn(
         train, args=(args.num_epochs, WORLD_SIZE),
@@ -212,3 +222,4 @@ if __name__=="__main__":
 # double-check DistributedSampler
 
 # %%
+# 1024 -> 768 -> 512
