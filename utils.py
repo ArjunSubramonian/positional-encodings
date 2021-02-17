@@ -6,6 +6,9 @@ from networkx.algorithms.centrality import betweenness_centrality, edge_betweenn
 from torch_geometric.utils.convert import to_networkx
 from torch_geometric.data import Data
 
+type_of_encoding = ["link", 'shortest_dist', "connectivity", 'edge_betweenness', "clique_number"]
+
+
 def compute_mutual_shortest_distances(d):
     d_nx = to_networkx(d, to_undirected=True)
     p = shortest_path(d_nx)
@@ -38,10 +41,11 @@ def compute_all_node_connectivity(d):
 
             connect_edge_attr[i * d.x.size(0) + j] = k[i][j]
 
-    return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, connect_edge_index=connect_edge_index,
-                connect_edge_attr=connect_edge_attr)
+    return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, other_edge_index=connect_edge_index,
+                other_edge_attr=connect_edge_attr)
 
 # This is node level & edge level betweenness centrality
+
 
 def compute_edge_betweenness_centrality(d):
     d_nx = to_networkx(d, to_undirected=True)
@@ -51,8 +55,8 @@ def compute_edge_betweenness_centrality(d):
     for i in range(d.edge_index.size(1)):
         bt_edge_attr[i] = edge_dict[i]
 
-    return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, bt_edge_index=d.edge_index,
-                bt_edge_attr=bt_edge_attr)
+    return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, other_edge_index=d.edge_index,
+                other_edge_attr=bt_edge_attr)
 
 
 def compute_clique_number(d):
@@ -68,5 +72,5 @@ def compute_clique_number(d):
 
             cliq_edge_attr[i * d.x.size(0) + j] = k[i][j]
 
-    return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, cliq_edge_index=cliq_edge_index,
-                cliq_edge_attr=cliq_edge_attr)
+    return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, other_edge_index=cliq_edge_index,
+                other_edge_attr=cliq_edge_attr)

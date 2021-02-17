@@ -12,7 +12,8 @@ import ogb
 from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
 
 from graph_transformer import GraphTransformerModel
-from utils import compute_mutual_shortest_distances
+from utils import compute_mutual_shortest_distances, compute_all_node_connectivity, compute_edge_betweenness_centrality, \
+                    compute_clique_number, type_of_encoding
 
 import torch.multiprocessing as mp
 import torch.distributed as dist
@@ -25,8 +26,9 @@ from warmup_scheduler import GradualWarmupScheduler
 
 parser = argparse.ArgumentParser(description='PyTorch implementation of relative positional encodings and relation-aware self-attention for graph Transformers')
 args = parser.parse_args("")
-args.device = 0
-args.device = torch.device('cuda:'+ str(args.device) if torch.cuda.is_available() else 'cpu')
+# args.device = 0
+# args.device = torch.device('cuda:'+ str(args.device) if torch.cuda.is_available() else 'cpu')
+args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # args.device = torch.device('cpu')
 print("device:", args.device)
 # torch.cuda.set_device(args.device)
@@ -62,8 +64,8 @@ args.ff_embed_dim = 640
 args.num_heads = 8
 args.graph_layers = 4
 args.dropout = 0.4
-args.relation_type = 'shortest_dist'
-args.pre_transform = compute_mutual_shortest_distances
+args.relation_type = "connectivity"
+args.pre_transform = compute_all_node_connectivity
 args.max_vocab = 12
 args.split = 'scaffold'
 args.num_epochs = 200
@@ -101,7 +103,8 @@ def train(rank, num_epochs, world_size):
             dataset[split_idx["train"]], rank=rank, num_replicas=world_size
         )
         
-        train_loader = DataLoader(dataset[split_idx["train"]], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=train_sampler)
+        train_loader = DataLoader(dataset[split_idx["train"]], batch_size=args.batch_size,
+                                  shuffle=False, drop_last=True, sampler=train_sampler)
         if rank == 0:
             valid_loader = DataLoader(dataset[split_idx["valid"]], batch_size=args.batch_size, shuffle=False, drop_last=True)
     elif args.split == '80-20':
@@ -109,9 +112,11 @@ def train(rank, num_epochs, world_size):
             dataset[:int(0.8 * len(dataset))], rank=rank, num_replicas=world_size
         )
         
-        train_loader = DataLoader(dataset[:int(0.8 * len(dataset))], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=train_sampler)
+        train_loader = DataLoader(dataset[:int(0.8 * len(dataset))], batch_size=args.batch_size,
+                                  shuffle=False, drop_last=True, sampler=train_sampler)
         if rank == 0:
-            valid_loader = DataLoader(dataset[int(0.8 * len(dataset)):int(0.9 * len(dataset))], batch_size=args.batch_size, shuffle=False, drop_last=True)
+            valid_loader = DataLoader(dataset[int(0.8 * len(dataset)):int(0.9 * len(dataset))],
+                                      batch_size=args.batch_size, shuffle=False, drop_last=True)
 
     model = GraphTransformerModel(args).cuda(rank)
     model = DistributedDataParallel(model, device_ids=[rank])
@@ -144,6 +149,7 @@ def train(rank, num_epochs, world_size):
         optimizer.zero_grad()
         for idx, batch in enumerate(train_loader):
             batch = batch.to(batch_device, non_blocking=True)
+            print("pre transformer {}".format(batch.edge_index))
             z = model(batch)
 
             y = batch.y.float()

@@ -5,6 +5,7 @@ from torch.nn import Parameter
 from ogb.graphproppred.mol_encoder import AtomEncoder
 from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool
 from torch_geometric.utils import to_dense_adj, to_dense_batch
+from utils import type_of_encoding
 
 class GraphTransformer(nn.Module):
 
@@ -243,13 +244,11 @@ class GraphTransformerModel(nn.Module):
             # print("src.sd_edge_index shape{}".format(src.sd_edge_index.shape))
             relation = self.relation_encoder(to_dense_adj(src.sd_edge_index, batch=src.batch, edge_attr=mod_sd_edge_attr,
                                                           max_num_nodes=x.size(0)).long())
-        elif self.relation_type == 'edge_betweenness':
+        elif self.relation_type in type_of_encoding:
+            other_edge_index = src.other_edge_index.reshape(-1).long()
+            other_edge_attr = src.other_edge_attr.reshape(-1).long()
             relation = self.relation_encoder(
-                to_dense_adj(src.sd_edge_index, batch=src.batch, edge_attr=bt_edge_attr,
-                             max_num_nodes=x.size(0)).long())
-        elif self.relation_type == 'connectivity':
-            relation = self.relation_encoder(
-                to_dense_adj(src.sd_edge_index, batch=src.batch, edge_attr=connect_sd_edge_attr,
+                to_dense_adj(other_edge_index, batch=src.batch, edge_attr=other_edge_attr,
                              max_num_nodes=x.size(0)).long())
         else:
             raise ValueError("Invalid relation type.")
