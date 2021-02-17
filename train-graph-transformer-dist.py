@@ -19,9 +19,9 @@ import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel
 import os
-
-import pytorch_warmup as warmup
 import datetime
+
+from warmup_scheduler import GradualWarmupScheduler
 
 parser = argparse.ArgumentParser(description='PyTorch implementation of relative positional encodings and relation-aware self-attention for graph Transformers')
 args = parser.parse_args("")
@@ -53,24 +53,24 @@ torch.backends.cudnn.benchmark = False
 args.dataset = 'ogbg-molhiv'
 args.n_classes = 1
 args.batch_size = 2
-args.lr = 3e-5
+args.lr = 5e-5
 args.graph_pooling = 'mean'
 args.proj_mode = 'nonlinear'
 args.eval_metric = 'rocauc'
-args.embed_dim = 512
-# args.ff_embed_dim = 1024
-args.ff_embed_dim = 512
+args.embed_dim = 320
+args.ff_embed_dim = 640
 args.num_heads = 8
 args.graph_layers = 4
-# args.dropout = 0.2
 args.dropout = 0.4
 args.relation_type = 'shortest_dist'
 args.pre_transform = compute_mutual_shortest_distances
 args.max_vocab = 12
 args.split = 'scaffold'
-args.num_epochs = 50
+args.num_epochs = 200
 args.weights_dropout = True
-args.grad_acc = 256
+args.grad_acc = 48
+args.cycle_steps = -1
+args.warmup_steps = -1
 
 
 # %%
@@ -103,7 +103,7 @@ def train(rank, num_epochs, world_size):
         
         train_loader = DataLoader(dataset[split_idx["train"]], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=train_sampler)
         if rank == 0:
-            test_loader = DataLoader(dataset[split_idx["test"]], batch_size=args.batch_size, shuffle=False, drop_last=True)
+            valid_loader = DataLoader(dataset[split_idx["valid"]], batch_size=args.batch_size, shuffle=False, drop_last=True)
     elif args.split == '80-20':
         train_sampler = DistributedSampler(
             dataset[:int(0.8 * len(dataset))], rank=rank, num_replicas=world_size
@@ -111,54 +111,61 @@ def train(rank, num_epochs, world_size):
         
         train_loader = DataLoader(dataset[:int(0.8 * len(dataset))], batch_size=args.batch_size, shuffle=False, drop_last=True, sampler=train_sampler)
         if rank == 0:
-            test_loader = DataLoader(dataset[int(0.8 * len(dataset)):], batch_size=args.batch_size, shuffle=False, drop_last=True)
+            valid_loader = DataLoader(dataset[int(0.8 * len(dataset)):int(0.9 * len(dataset))], batch_size=args.batch_size, shuffle=False, drop_last=True)
 
     model = GraphTransformerModel(args).cuda(rank)
     model = DistributedDataParallel(model, device_ids=[rank])
     batch_device = torch.device('cuda:'+ str(rank) if torch.cuda.is_available() else 'cpu')
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    num_steps = (len(train_loader) // args.grad_acc) * num_epochs # * world_size (not sure if this is necessary?)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_steps)
-    warmup_scheduler = warmup.UntunedLinearWarmup(optimizer)
+    # args.warmup_steps = len(train_loader) // args.grad_acc
+    args.warmup_steps = 1000
+    # args.cycle_steps = 5 * args.warmup_steps
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=args.cycle_steps)
+    scheduler = None
+    scheduler_warmup = GradualWarmupScheduler(optimizer, multiplier=1, total_epoch=args.warmup_steps, after_scheduler=scheduler)
     criterion = torch.nn.BCEWithLogitsLoss(reduction = "mean")
     evaluator = Evaluator(name=args.dataset)
 
     if rank == 0:
         args.writer = SummaryWriter(log_dir='runs/molhiv/' + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     
+    best_valid_score = -1
+    num_iters = 0
     for epoch in range(num_epochs):
         ############
         # TRAINING #
         ############
-        train_sampler.set_epoch(epoch)
+        train_sampler.set_epoch(epoch + 1)
         
         model.train()
 
         loss_epoch = 0
         optimizer.zero_grad()
         for idx, batch in enumerate(train_loader):
-            # print(rank, idx, '/', len(train_loader), batch)
             batch = batch.to(batch_device, non_blocking=True)
             z = model(batch)
 
             y = batch.y.float()
             is_valid = ~torch.isnan(y)
 
-            loss = criterion(z[is_valid], y[is_valid]) # / args.grad_acc 
+            loss = criterion(z[is_valid], y[is_valid]) / args.grad_acc 
             loss.backward()
             # gradient accumulation
             if (idx + 1) % args.grad_acc == 0:
                 optimizer.step()
                 optimizer.zero_grad()
-                scheduler.step()
-                warmup_scheduler.dampen()
+                scheduler_warmup.step()
+                if rank == 0:
+                    args.writer.add_scalar("LR/iters", optimizer.param_groups[0]['lr'], num_iters + 1)
+                    num_iters += 1
 
             loss_epoch += loss.detach().item()
         
         if rank == 0:
             print('Epoch:', epoch + 1)
             args.writer.add_scalar("Loss/train", loss_epoch / len(train_loader), epoch + 1)
+            args.writer.add_scalar("LR/epoch", optimizer.param_groups[0]['lr'], epoch + 1)
         print('Train loss (cuda:' + str(rank) + '):', loss_epoch / len(train_loader))
 
         if rank == 0:
@@ -172,7 +179,7 @@ def train(rank, num_epochs, world_size):
                 loss_epoch = 0
                 y_true = []
                 y_scores = []
-                for idx, batch in enumerate(test_loader):
+                for idx, batch in enumerate(valid_loader):
                     batch = batch.to(batch_device, non_blocking=True)
                     z = model(batch)
 
@@ -190,20 +197,21 @@ def train(rank, num_epochs, world_size):
             input_dict = {"y_true": y_true, "y_pred": y_scores}
             result_dict = evaluator.eval(input_dict)
         
-            args.writer.add_scalar("Loss/test", loss_epoch / len(test_loader), epoch + 1)
-            print('Test loss:', loss_epoch / len(test_loader))
-            print('Test ROC-AUC:', result_dict[args.eval_metric])
-
+            args.writer.add_scalar("Loss/valid", loss_epoch / len(valid_loader), epoch + 1)
+            print('Valid loss:', loss_epoch / len(valid_loader))
+            print('Valid ROC-AUC:', result_dict[args.eval_metric])
+            
             print()
 
-            if (epoch + 1) % 10 == 0:
+            if result_dict[args.eval_metric] >= best_valid_score:
                 torch.save(
                     model.state_dict(),
-                    f'./models/model_{epoch + 1}_{args.dataset}.pth'
+                    f'./models/model_{epoch + 1}_{args.dataset}_lr{args.lr}.pth'
                 )
+                best_valid_score = result_dict[args.eval_metric]
         
 if __name__=="__main__":
-    os.environ['CUDA_VISIBLE_DEVICES']='1,2,3'
+    os.environ['CUDA_VISIBLE_DEVICES']='1,2,3,5,6,7'
     WORLD_SIZE = torch.cuda.device_count()
     mp.spawn(
         train, args=(args.num_epochs, WORLD_SIZE),
@@ -211,15 +219,3 @@ if __name__=="__main__":
     )
     args.writer.close()
 
-
-# %%
-# try 'bace' dataset
-# Longformer, if fully-connected data is too much information
-# random sampling for training dataset
-# plot learning curve
-# warmup steps for learning
-# there might be bugs
-# double-check DistributedSampler
-
-# %%
-# 1024 -> 768 -> 512
