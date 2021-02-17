@@ -207,7 +207,8 @@ class GraphTransformerModel(nn.Module):
         super(GraphTransformerModel, self).__init__()
         self.model_type = 'GraphTransformerModel'
         self.encoder = AtomEncoder(emb_dim=args.embed_dim)
-        self.transformer = GraphTransformer(args.graph_layers, args.embed_dim, args.ff_embed_dim, args.num_heads, args.dropout, args.weights_dropout)
+        self.transformer = GraphTransformer(args.graph_layers, args.embed_dim,
+                                            args.ff_embed_dim, args.num_heads, args.dropout, args.weights_dropout)
         
         #Different kind of graph pooling
         if args.graph_pooling == "sum":
@@ -238,7 +239,18 @@ class GraphTransformerModel(nn.Module):
             relation = self.relation_encoder(to_dense_adj(src.edge_index, batch=src.batch, max_num_nodes=x.size(0)).long())
         elif self.relation_type == 'shortest_dist':
             mod_sd_edge_attr = torch.clamp(src.sd_edge_attr.reshape(-1), 0, self.max_vocab - 1).long()
-            relation = self.relation_encoder(to_dense_adj(src.sd_edge_index, batch=src.batch, edge_attr=mod_sd_edge_attr, max_num_nodes=x.size(0)).long())
+            # print("mod_sd_edge_attr shape{}".format(mod_sd_edge_attr.shape))
+            # print("src.sd_edge_index shape{}".format(src.sd_edge_index.shape))
+            relation = self.relation_encoder(to_dense_adj(src.sd_edge_index, batch=src.batch, edge_attr=mod_sd_edge_attr,
+                                                          max_num_nodes=x.size(0)).long())
+        elif self.relation_type == 'edge_betweenness':
+            relation = self.relation_encoder(
+                to_dense_adj(src.sd_edge_index, batch=src.batch, edge_attr=bt_edge_attr,
+                             max_num_nodes=x.size(0)).long())
+        elif self.relation_type == 'connectivity':
+            relation = self.relation_encoder(
+                to_dense_adj(src.sd_edge_index, batch=src.batch, edge_attr=connect_sd_edge_attr,
+                             max_num_nodes=x.size(0)).long())
         else:
             raise ValueError("Invalid relation type.")
         
