@@ -67,6 +67,7 @@ args.pre_transform = compute_mutual_shortest_distances
 args.max_vocab = 12
 args.split = 'scaffold'
 args.num_epochs = 200
+args.k_hop_neighbors = 2
 args.weights_dropout = True
 args.grad_acc = 48
 args.cycle_steps = -1
@@ -204,14 +205,14 @@ def train(rank, num_epochs, world_size):
             print()
 
             if result_dict[args.eval_metric] >= best_valid_score:
-                torch.save(
-                    model.state_dict(),
-                    f'./models/model_{epoch + 1}_{args.dataset}_lr{args.lr}.pth'
-                )
+#                 torch.save(
+#                     model.state_dict(),
+#                     f'./models/model_{epoch + 1}_{args.dataset}_lr{args.lr}.pth'
+#                 )
                 best_valid_score = result_dict[args.eval_metric]
         
 if __name__=="__main__":
-    os.environ['CUDA_VISIBLE_DEVICES']='1,2,3,5,6,7'
+    os.environ['CUDA_VISIBLE_DEVICES']='1,2,3,4,5,6'
     WORLD_SIZE = torch.cuda.device_count()
     mp.spawn(
         train, args=(args.num_epochs, WORLD_SIZE),
@@ -219,3 +220,6 @@ if __name__=="__main__":
     )
     args.writer.close()
 
+
+# %%
+# pip install git+https://github.com/ildoonet/pytorch-gradual-warmup-lr.git
