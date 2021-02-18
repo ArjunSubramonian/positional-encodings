@@ -40,7 +40,8 @@ def compute_all_node_connectivity(d):
             connect_edge_index[1][i * d.x.size(0) + j] = j
 
             connect_edge_attr[i * d.x.size(0) + j] = k[i][j]
-
+    print("enter")
+    print("connect_edge {}".format(connect_edge_index))
     return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, other_edge_index=connect_edge_index,
                 other_edge_attr=connect_edge_attr)
 
