@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Parameter
-from ogb.graphproppred.mol_encoder import AtomEncoder
+from ogb.graphproppred.mol_encoder import AtomEncoder, BondEncoder
 from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool
 from torch_geometric.utils import to_dense_adj, to_dense_batch
 from utils import type_of_encoding
@@ -38,7 +38,9 @@ class GraphTransformerLayer(nn.Module):
         self.fc1 = nn.Linear(embed_dim, ff_embed_dim)
         self.fc2 = nn.Linear(ff_embed_dim, embed_dim)
         self.attn_layer_norm = nn.LayerNorm(embed_dim)
+        # self.attn_batch_norm = nn.BatchNorm1d(embed_dim) # can consider BatchNorm in the future?
         self.ff_layer_norm = nn.LayerNorm(embed_dim)
+        # self.ff_batch_norm = nn.BatchNorm1d(embed_dim) # can consider BatchNorm in the future?
         self.dropout = dropout
         self.reset_parameters()
 
@@ -138,10 +140,14 @@ class RelationMultiheadAttention(nn.Module):
         assert list(attn_weights.size()) == [tgt_len, src_len, bsz * self.num_heads]
 
         if attn_mask is not None:
+            attn_weights = attn_weights.view(tgt_len, src_len, bsz, self.num_heads)
             attn_weights.masked_fill_(
                 attn_mask.unsqueeze(-1),
                 float('-inf')
             )
+            # will produce NaNs post-softmax because padding nodes are not connected to any other nodes
+            # will get rid of NaNs later by setting them to 0
+            attn_weights = attn_weights.view(tgt_len, src_len, bsz * self.num_heads)
 
         if key_padding_mask is not None:
             # don't attend to padding symbols
@@ -154,6 +160,7 @@ class RelationMultiheadAttention(nn.Module):
 
 
         attn_weights = F.softmax(attn_weights, dim=1)
+        attn_weights = attn_weights.masked_fill(attn_weights != attn_weights, 0)  # get rid of NaNs!
 
         if self.weights_dropout:
             attn_weights = F.dropout(attn_weights, p=self.dropout, training=self.training)
@@ -208,8 +215,8 @@ class GraphTransformerModel(nn.Module):
         super(GraphTransformerModel, self).__init__()
         self.model_type = 'GraphTransformerModel'
         self.encoder = AtomEncoder(emb_dim=args.embed_dim)
-        self.transformer = GraphTransformer(args.graph_layers, args.embed_dim,
-                                            args.ff_embed_dim, args.num_heads, args.dropout, args.weights_dropout)
+        self.edge_encoder = BondEncoder(emb_dim=args.embed_dim)
+        self.transformer = GraphTransformer(args.graph_layers, args.embed_dim, args.ff_embed_dim, args.num_heads, args.dropout, args.weights_dropout)
         
         #Different kind of graph pooling
         if args.graph_pooling == "sum":
@@ -231,10 +238,22 @@ class GraphTransformerModel(nn.Module):
         self.relation_type = args.relation_type
         self.max_vocab = args.max_vocab
         self.relation_encoder = nn.Embedding(args.max_vocab, args.embed_dim)
-
+        
+        self.k = args.k_hop_neighbors
+        
     def forward(self, src, src_mask=None):
         x, mask = to_dense_batch(self.encoder(src.x), batch=src.batch, fill_value=0)
         x = x.transpose(0, 1)
+        
+        if self.k is not None:
+            dense_orig_adj = to_dense_adj(src.edge_index, batch=src.batch, max_num_nodes=x.size(0)).squeeze(dim=-1)
+            self_attn_mask = dense_orig_adj.bool()
+            for k in range(2, self.k + 1):
+                dense_orig_adj = torch.matmul(dense_orig_adj, dense_orig_adj)
+                self_attn_mask |= dense_orig_adj.bool()
+            self_attn_mask = ~self_attn_mask.permute(2, 1, 0)
+        else:
+            self_attn_mask = None
         
         if self.relation_type == 'link':
             relation = self.relation_encoder(to_dense_adj(src.edge_index, batch=src.batch, max_num_nodes=x.size(0)).long())
@@ -250,12 +269,16 @@ class GraphTransformerModel(nn.Module):
             relation = self.relation_encoder(
                 to_dense_adj(other_edge_index, batch=src.batch, edge_attr=other_edge_attr,
                              max_num_nodes=x.size(0)).long())
+            relation = self.relation_encoder(to_dense_adj(src.sd_edge_index, batch=src.batch, edge_attr=mod_sd_edge_attr, max_num_nodes=x.size(0)).long())
         else:
             raise ValueError("Invalid relation type.")
         
+        # integrate given edge features
+        mod_edge_attr = self.edge_encoder(src.edge_attr)
+        relation += to_dense_adj(src.edge_index, batch=src.batch, edge_attr=mod_edge_attr, max_num_nodes=x.size(0))
         relation = relation.permute(2, 1, 0, 3)
         
-        output = self.transformer(x, relation, self_padding_mask=~mask.transpose(0, 1))
+        output = self.transformer(x, relation, self_padding_mask=~mask.transpose(0, 1), self_attn_mask=self_attn_mask)
         
         graph_emb = self.graph_pool(output.transpose(0, 1)[mask], src.batch)
         graph_pred = self.task_pred(graph_emb)
