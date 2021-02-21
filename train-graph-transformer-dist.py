@@ -31,23 +31,23 @@ args.device = torch.device('cuda:'+ str(args.device) if torch.cuda.is_available(
 print("device:", args.device)
 # torch.cuda.set_device(args.device)
 
-torch.manual_seed(0)
-np.random.seed(0)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(0)
+# torch.manual_seed(0)
+# np.random.seed(0)
+# if torch.cuda.is_available():
+#     torch.cuda.manual_seed_all(0)
 
-def set_seed(seed):
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+# def set_seed(seed):
+#     torch.manual_seed(seed)
+#     np.random.seed(seed)
+#     random.seed(seed)
+#     if torch.cuda.is_available():
+#         torch.cuda.manual_seed_all(seed)
 
-seed = 0
-set_seed(seed)
+# seed = 0
+# set_seed(seed)
 
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
+# torch.backends.cudnn.deterministic = True
+# torch.backends.cudnn.benchmark = False
 
 # %%
 args.dataset = 'ogbg-molhiv'
@@ -72,6 +72,7 @@ args.weights_dropout = True
 args.grad_acc = 48
 args.cycle_steps = -1
 args.warmup_steps = -1
+args.weight_decay = 0.01
 
 
 # %%
@@ -91,7 +92,7 @@ def train(rank, num_epochs, world_size):
     dist.barrier()
     print("Loading data...")
     print("dataset: {} ".format(args.dataset))
-    dataset = PygGraphPropPredDataset(name=args.dataset, pre_transform=args.pre_transform).shuffle()
+    dataset = PygGraphPropPredDataset(name=args.dataset, pre_transform=args.pre_transform)
     print(
         f"{rank + 1}/{world_size} process initialized.\n"
     )
@@ -118,12 +119,17 @@ def train(rank, num_epochs, world_size):
     model = DistributedDataParallel(model, device_ids=[rank])
     batch_device = torch.device('cuda:'+ str(rank) if torch.cuda.is_available() else 'cpu')
     
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    # args.warmup_steps = len(train_loader) // args.grad_acc
+    no_decay = ["bias", "LayerNorm.weight"]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+            "weight_decay": args.weight_decay,
+        },
+        {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
+    ]
+    optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.lr)
     args.warmup_steps = 1000
-    # args.cycle_steps = 5 * args.warmup_steps
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=args.cycle_steps)
-    scheduler = None
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr, steps_per_epoch=len(train_loader) // args.grad_acc, epochs=num_epochs)
     scheduler_warmup = GradualWarmupScheduler(optimizer, multiplier=1, total_epoch=args.warmup_steps, after_scheduler=scheduler)
     criterion = torch.nn.BCEWithLogitsLoss(reduction = "mean")
     evaluator = Evaluator(name=args.dataset)
@@ -205,10 +211,10 @@ def train(rank, num_epochs, world_size):
             print()
 
             if result_dict[args.eval_metric] >= best_valid_score:
-#                 torch.save(
-#                     model.state_dict(),
-#                     f'./models/model_{epoch + 1}_{args.dataset}_lr{args.lr}.pth'
-#                 )
+                torch.save(
+                    model.state_dict(),
+                    f'./models/model_{epoch + 1}_{args.dataset}_lr{args.lr}.pth'
+                )
                 best_valid_score = result_dict[args.eval_metric]
         
 if __name__=="__main__":
