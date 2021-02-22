@@ -29,6 +29,7 @@ args = parser.parse_args("")
 # args.device = 0
 # args.device = torch.device('cuda:'+ str(args.device) if torch.cuda.is_available() else 'cpu')
 args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 # args.device = torch.device('cpu')
 print("device:", args.device)
 # torch.cuda.set_device(args.device)
@@ -66,10 +67,10 @@ args.graph_layers = 4
 args.dropout = 0.4
 args.relation_type = "connectivity"
 args.pre_transform = compute_all_node_connectivity
-args.max_vocab = 12
+args.max_vocab = 6
 args.split = 'scaffold'
 args.num_epochs = 200
-args.k_hop_neighbors = 2
+args.k_hop_neighbors = 4
 args.weights_dropout = True
 args.grad_acc = 48
 args.cycle_steps = -1
@@ -93,7 +94,7 @@ def train(rank, num_epochs, world_size):
     dist.barrier()
     print("Loading data...")
     print("dataset: {} ".format(args.dataset))
-    dataset = PygGraphPropPredDataset(name=args.dataset, pre_transform=args.pre_transform).shuffle()
+    dataset = PygGraphPropPredDataset(name=args.dataset, pre_transform=args.pre_transform)
     print(
         f"{rank + 1}/{world_size} process initialized.\n"
     )
@@ -118,9 +119,12 @@ def train(rank, num_epochs, world_size):
         if rank == 0:
             valid_loader = DataLoader(dataset[int(0.8 * len(dataset)):int(0.9 * len(dataset))],
                                       batch_size=args.batch_size, shuffle=False, drop_last=True)
+    if not args.device == "cpu":
+        model = GraphTransformerModel(args).cuda(rank)
+        model = DistributedDataParallel(model, device_ids=[rank])
+    else:
+        model = GraphTransformerModel(args)
 
-    model = GraphTransformerModel(args).cuda(rank)
-    model = DistributedDataParallel(model, device_ids=[rank])
     batch_device = torch.device('cuda:'+ str(rank) if torch.cuda.is_available() else 'cpu')
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
@@ -150,7 +154,7 @@ def train(rank, num_epochs, world_size):
         optimizer.zero_grad()
         for idx, batch in enumerate(train_loader):
             batch = batch.to(batch_device, non_blocking=True)
-            print("pre transformer {}".format(batch.edge_index))
+            # print("pre transformer {}".format(batch.edge_attr))
             z = model(batch)
 
             y = batch.y.float()
