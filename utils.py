@@ -31,10 +31,9 @@ def compute_mutual_shortest_distances(d):
 def compute_all_node_connectivity(d):
     d_nx = to_networkx(d, to_undirected=True)
     k = all_pairs_node_connectivity(d_nx)
-    # print(k)
-    max_value = 2
-    connect_edge_index = torch.LongTensor(2, d.x.size(0) * d.x.size(0))
-    connect_edge_attr = torch.FloatTensor(d.x.size(0) * d.x.size(0), 1)
+    connect_edge_index = torch.zeros(2, d.x.size(0) * d.x.size(0))
+    connect_edge_attr = torch.zeros(d.x.size(0) * d.x.size(0), 1)
+
     for i in range(d.x.size(0)):
         for j in range(d.x.size(0)):
             connect_edge_index[0][i * d.x.size(0) + j] = i
@@ -42,11 +41,6 @@ def compute_all_node_connectivity(d):
 
             if not i == j:
                 connect_edge_attr[i * d.x.size(0) + j] = k[i][j]
-                if k[i][j] > max_value:
-                    max_value = k[i][j]
-    # print("enter")
-    # print("connect_edge {}".format(connect_edge_index))
-    # print("max value is {}".format(max_value))
     return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, other_edge_index=connect_edge_index,
                 other_edge_attr=connect_edge_attr)
 

@@ -18,7 +18,7 @@ from utils import compute_mutual_shortest_distances, compute_all_node_connectivi
 import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
-from torch.nn.parallel import DistributedDataParallel
+from torch.nn.parallel import DistributedDataParallel, DataParallel
 import os
 import datetime
 
@@ -26,11 +26,10 @@ from warmup_scheduler import GradualWarmupScheduler
 
 parser = argparse.ArgumentParser(description='PyTorch implementation of relative positional encodings and relation-aware self-attention for graph Transformers')
 args = parser.parse_args("")
-# args.device = 0
+# args.device = 2
 # args.device = torch.device('cuda:'+ str(args.device) if torch.cuda.is_available() else 'cpu')
 args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# args.device = torch.device('cpu')
 print("device:", args.device)
 # torch.cuda.set_device(args.device)
 
@@ -86,11 +85,6 @@ def init_process(rank, size, backend='gloo'):
 
 def train(rank, num_epochs, world_size):
     init_process(rank, world_size)
-    
-    if rank == 0:
-        print("Loading data...")
-        print("dataset: {} ".format(args.dataset))
-        dataset = PygGraphPropPredDataset(name=args.dataset, pre_transform=args.pre_transform)
     dist.barrier()
     print("Loading data...")
     print("dataset: {} ".format(args.dataset))
@@ -119,14 +113,15 @@ def train(rank, num_epochs, world_size):
         if rank == 0:
             valid_loader = DataLoader(dataset[int(0.8 * len(dataset)):int(0.9 * len(dataset))],
                                       batch_size=args.batch_size, shuffle=False, drop_last=True)
-    if not args.device == "cpu":
+    if rank != 0:
         model = GraphTransformerModel(args).cuda(rank)
         model = DistributedDataParallel(model, device_ids=[rank])
     else:
-        model = GraphTransformerModel(args)
+        model = GraphTransformerModel(args).cuda()
+        model = DataParallel(model)
 
-    batch_device = torch.device('cuda:'+ str(rank) if torch.cuda.is_available() else 'cpu')
-    
+    batch_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     # args.warmup_steps = len(train_loader) // args.grad_acc
     args.warmup_steps = 1000
@@ -147,14 +142,11 @@ def train(rank, num_epochs, world_size):
         # TRAINING #
         ############
         train_sampler.set_epoch(epoch + 1)
-        
         model.train()
-
         loss_epoch = 0
         optimizer.zero_grad()
         for idx, batch in enumerate(train_loader):
             batch = batch.to(batch_device, non_blocking=True)
-            # print("pre transformer {}".format(batch.edge_attr))
             z = model(batch)
 
             y = batch.y.float()
@@ -222,7 +214,7 @@ def train(rank, num_epochs, world_size):
                 best_valid_score = result_dict[args.eval_metric]
         
 if __name__=="__main__":
-    os.environ['CUDA_VISIBLE_DEVICES']='1,2,3,4,5,6'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '2,3'
     WORLD_SIZE = torch.cuda.device_count()
     mp.spawn(
         train, args=(args.num_epochs, WORLD_SIZE),

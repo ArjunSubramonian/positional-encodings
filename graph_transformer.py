@@ -243,6 +243,7 @@ class GraphTransformerModel(nn.Module):
         
     def forward(self, src, src_mask=None):
         x, mask = to_dense_batch(self.encoder(src.x), batch=src.batch, fill_value=0)
+        # print("1 place src.batch {}".format(src.batch))
         x = x.transpose(0, 1)
         
         if self.k is not None:
@@ -259,16 +260,13 @@ class GraphTransformerModel(nn.Module):
             relation = self.relation_encoder(to_dense_adj(src.edge_index, batch=src.batch, max_num_nodes=x.size(0)).long())
         elif self.relation_type == 'shortest_dist':
             mod_sd_edge_attr = torch.clamp(src.sd_edge_attr.reshape(-1), 0, self.max_vocab - 1).long()
-            # print("mod_sd_edge_attr shape{}".format(mod_sd_edge_attr.shape))
-            # print("src.sd_edge_index shape{}".format(src.sd_edge_index.shape))
+            # print("src.batch {}".format(src.batch))
             relation = self.relation_encoder(to_dense_adj(src.sd_edge_index, batch=src.batch, edge_attr=mod_sd_edge_attr,
                                                           max_num_nodes=x.size(0)).long())
         elif self.relation_type in type_of_encoding:
-            other_edge_index = src.other_edge_index.reshape(-1).long()
-            print("other_Edge_attr max {}".format(torch.max(src.other_edge_attr)))
             other_edge_attr = torch.clamp(src.other_edge_attr.reshape(-1), 0, self.max_vocab - 1).long()
             relation = self.relation_encoder(
-                to_dense_adj(other_edge_index, batch=src.batch, edge_attr=other_edge_attr,
+                to_dense_adj(src.other_edge_index.long(), batch=src.batch, edge_attr=other_edge_attr,
                              max_num_nodes=x.size(0)).long())
         else:
             raise ValueError("Invalid relation type.")
@@ -276,7 +274,7 @@ class GraphTransformerModel(nn.Module):
         # integrate given edge features
 
         mod_edge_attr = self.edge_encoder(src.edge_attr)
-        print("mod_edge_attr {}".format(mod_edge_attr))
+        # print("mod_edge_attr {}".format(mod_edge_attr))
         relation += to_dense_adj(src.edge_index, batch=src.batch, edge_attr=mod_edge_attr, max_num_nodes=x.size(0))
         relation = relation.permute(2, 1, 0, 3)
         
