@@ -68,7 +68,7 @@ args.pre_transform = compute_all_node_connectivity
 args.max_vocab = 6
 args.split = 'scaffold'
 args.num_epochs = 200
-args.k_hop_neighbors = 8
+args.k_hop_neighbors = None
 args.weights_dropout = True
 args.grad_acc = 48
 args.cycle_steps = -1
@@ -159,7 +159,7 @@ def train(rank, num_epochs, world_size):
                     num_iters += 1
 
             loss_epoch += loss.detach().item()
-        
+        print("can print here")
         if rank == 0:
             print('Epoch:', epoch + 1)
             args.writer.add_scalar("Loss/train", loss_epoch / len(train_loader), epoch + 1)
@@ -196,10 +196,9 @@ def train(rank, num_epochs, world_size):
             result_dict = evaluator.eval(input_dict)
         
             args.writer.add_scalar("Loss/valid", loss_epoch / len(valid_loader), epoch + 1)
+            args.writer.add_scalar("ROCAUC/valid", result_dict[args.eval_metric], epoch + 1)
             print('Valid loss:', loss_epoch / len(valid_loader))
             print('Valid ROC-AUC:', result_dict[args.eval_metric])
-            
-            print()
 
             if result_dict[args.eval_metric] >= best_valid_score:
                 torch.save(
@@ -207,9 +206,10 @@ def train(rank, num_epochs, world_size):
                     f'./models/model_{epoch + 1}_{args.dataset}_lr{args.lr}.pth'
                 )
                 best_valid_score = result_dict[args.eval_metric]
+
         
 if __name__=="__main__":
-    os.environ['CUDA_VISIBLE_DEVICES'] = '4,5'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '2,3'
     WORLD_SIZE = torch.cuda.device_count()
     mp.spawn(
         train, args=(args.num_epochs, WORLD_SIZE),
