@@ -271,10 +271,10 @@ class GraphTransformerModel(nn.Module):
         ## continous
         elif self.relation_type in type_of_encoding:
             ### change according to the encodings ###
-            value_max = src.jaccard_max + 10
+            value_max = src.jaccard_max + 2
             bin_size = value_max/self.max_vocab
             other_edge_index = src.jaccard_index.long()
-            other_edge_attr = torch.clamp(src.jaccard_attr.reshape(-1), 0, self.max_vocab - 1)
+            other_edge_attr = torch.clamp(src.jaccard_attr.reshape(-1), 0, value_max - 1)
             other_edge_attr = (other_edge_attr / bin_size).int().long()
             ### change according to the encodings ###
             relation = self.relation_encoder(
