@@ -62,7 +62,7 @@ args.ff_embed_dim = 640
 args.num_heads = 8
 args.graph_layers = 4
 args.dropout = 0.4
-args.relation_type = "jaccard_coefficient"
+args.relation_type = "jaccard"
 args.pre_transform = compute_all_attributes
 args.max_vocab = 150
 args.split = 'scaffold'
@@ -77,7 +77,7 @@ args.warmup_steps = -1
 def init_process(rank, size, backend='gloo'):
     """ Initialize the distributed environment. """
     os.environ['MASTER_ADDR'] = '127.0.0.1'
-    os.environ['MASTER_PORT'] = '29502'
+    os.environ['MASTER_PORT'] = '29500'
     dist.init_process_group(backend, rank=rank, world_size=size)
 
 def train(rank, num_epochs, world_size):
@@ -207,7 +207,7 @@ def train(rank, num_epochs, world_size):
 
         
 if __name__=="__main__":
-    os.environ['CUDA_VISIBLE_DEVICES'] = '5,4'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '2,3'
     WORLD_SIZE = torch.cuda.device_count()
     mp.spawn(
         train, args=(args.num_epochs, WORLD_SIZE),

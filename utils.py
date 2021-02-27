@@ -61,6 +61,7 @@ def tuple_fetch(size, tuple):
     current_max = 0
     index = torch.zeros(2, size * size)
     attr = torch.zeros(size * size, 1)
+
     for i, j, p in tuple:
         index[0][i * size + j] = i
         index[1][i * size + j] = j
@@ -70,7 +71,6 @@ def tuple_fetch(size, tuple):
             current_max = p
 
     return current_max, index, attr
-
 
 ### all other at once###
 
@@ -104,7 +104,7 @@ def compute_all_attributes(d):
     adamic_max, adamic_index, adamic_attr = tuple_fetch(d.x.size(0), adamic_t)
     preferential_max, preferential_index, preferential_attr = tuple_fetch(d.x.size(0), preferential_t)
     cn_soundarajan_max, cn_soundarajan_index, cn_soundarajan_attr = tuple_fetch(d.x.size(0), cn_soundarajan_t)
-    ra_index_max, ra_index_index, ra_index_attr = tuple_fetch(d.x.size(0), ra_index_t)
+    ra_index_max, ra_index_index, ra_index_attr  = tuple_fetch(d.x.size(0), ra_index_t)
     centrality_max, centrality_index, centrality_attr = tuple_fetch(d.x.size(0), centrality_t)
     cluster_max, cluster_index, cluster_attr = tuple_fetch(d.x.size(0), cluster_t)
 
