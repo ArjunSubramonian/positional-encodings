@@ -62,9 +62,9 @@ args.ff_embed_dim = 640
 args.num_heads = 8
 args.graph_layers = 4
 args.dropout = 0.4
-args.relation_type = "jaccard"
+args.relation_type = "adamic"
 args.pre_transform = compute_all_attributes
-args.max_vocab = 150
+args.max_vocab = 120
 args.split = 'scaffold'
 args.num_epochs = 200
 args.k_hop_neighbors = 8
@@ -126,7 +126,7 @@ def train(rank, num_epochs, world_size):
     evaluator = Evaluator(name=args.dataset)
 
     if rank == 0:
-        args.writer = SummaryWriter(log_dir='runs/molhiv/' + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+        args.writer = SummaryWriter(log_dir='runs/molhiv/' + args.relation_type + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     
     best_valid_score = -1
     num_iters = 0
@@ -138,14 +138,36 @@ def train(rank, num_epochs, world_size):
         model.train()
         loss_epoch = 0
         optimizer.zero_grad()
+        # current_max = 0
+        # alloc_now = 0
+        # adamic_now = 0
+        # preferential_now = 0
+        # com_now = 0
         for idx, batch in enumerate(train_loader):
             batch = batch.to(batch_device, non_blocking=True)
+            # this_batch_max = torch.max(batch.jaccard_max)
+            # if this_batch_max > current_max:
+            #     current_max = this_batch_max
+            # if torch.max(batch.alloc_max) > alloc_now:
+            #     alloc_now = torch.max(batch.alloc_max)
+            # if torch.max(batch.adamic_max) > adamic_now:
+            #     adamic_now = torch.max(batch.adamic_max)
+            # if torch.max(batch.preferential_max) > preferential_now:
+            #     preferential_now = torch.max(batch.preferential_max)
+            # if torch.max(batch.com_max) > com_now:
+            #     com_now = torch.max(batch.com_max)
+            # if idx % 1000 == 0 and not idx == 0:
+            #     print("jaccard max {}\n\n".format(current_max))
+            #     print("alloc_now max {}\n\n".format(alloc_now))
+            #     print("adamic_now {}\n\n".format(adamic_now))
+            #     print("preferential_now {}\n\n".format(preferential_now))
+            #     print("com_now {}\n\n".format(com_now))
             z = model(batch)
 
             y = batch.y.float()
             is_valid = ~torch.isnan(y)
 
-            loss = criterion(z[is_valid], y[is_valid]) / args.grad_acc 
+            loss = criterion(z[is_valid], y[is_valid]) / args.grad_acc
             loss.backward()
             # gradient accumulation
             if (idx + 1) % args.grad_acc == 0:
@@ -157,7 +179,13 @@ def train(rank, num_epochs, world_size):
                     num_iters += 1
 
             loss_epoch += loss.detach().item()
-        print("can print here")
+        # print("final round")
+        # print("jaccard max {}\n\n".format(current_max))
+        # print("alloc_now max {}\n\n".format(alloc_now))
+        # print("adamic_now {}\n\n".format(adamic_now))
+        # print("preferential_now {}\n\n".format(preferential_now))
+        # print("com_now {}\n\n".format(com_now))
+
         if rank == 0:
             print('Epoch:', epoch + 1)
             args.writer.add_scalar("Loss/train", loss_epoch / len(train_loader), epoch + 1)
@@ -201,13 +229,13 @@ def train(rank, num_epochs, world_size):
             if result_dict[args.eval_metric] >= best_valid_score:
                 torch.save(
                     model.state_dict(),
-                    f'./models/{args.pre_transform}_model_{epoch + 1}_{args.dataset}_lr{args.lr}.pth'
+                    f'./models/{args.relation_type}_model_{epoch + 1}_{args.dataset}_lr{args.lr}.pth'
                 )
                 best_valid_score = result_dict[args.eval_metric]
 
         
 if __name__=="__main__":
-    os.environ['CUDA_VISIBLE_DEVICES'] = '2,3'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '5,2'
     os.environ['PYTHONWARNINGS'] = 'ignore:semaphore_tracker:UserWarning'
     WORLD_SIZE = torch.cuda.device_count()
     mp.spawn(

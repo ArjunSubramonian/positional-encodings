@@ -240,7 +240,6 @@ class GraphTransformerModel(nn.Module):
         self.relation_encoder = nn.Embedding(args.max_vocab, args.embed_dim)
 
         self.k = args.k_hop_neighbors
-        self.bin = args.bin
 
     def forward(self, src, src_mask=None):
         x, mask = to_dense_batch(self.encoder(src.x), batch=src.batch, fill_value=0)
@@ -271,11 +270,11 @@ class GraphTransformerModel(nn.Module):
         ## continous
         elif self.relation_type in type_of_encoding:
             ### change according to the encodings ###
-            value_max = src.jaccard_max + 2
+            value_max = 3
             bin_size = value_max/self.max_vocab
-            other_edge_index = src.jaccard_index.long()
-            other_edge_attr = torch.clamp(src.jaccard_attr.reshape(-1), 0, value_max - 1)
-            other_edge_attr = (other_edge_attr / bin_size).int().long()
+            other_edge_index = src.adamic_index.long()
+            other_edge_attr = (src.adamic_attr.reshape(-1) / bin_size).int().long()
+            other_edge_attr = torch.clamp(other_edge_attr, 0, self.max_vocab - 1)
             ### change according to the encodings ###
             relation = self.relation_encoder(
                             to_dense_adj(other_edge_index,
