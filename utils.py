@@ -3,15 +3,9 @@ from networkx.algorithms.shortest_paths.generic import shortest_path
 from networkx.algorithms.approximation.connectivity import all_pairs_node_connectivity
 from networkx.algorithms.clique import node_clique_number
 from networkx.algorithms.centrality import betweenness_centrality, edge_betweenness_centrality
-from networkx.algorithms.link_prediction.resource_allocation_index import resource_allocation_index
-from networkx.algorithms.centrality.communicability_alg import communicability
-from networkx.algorithms.link_prediction.jaccard_coefficient import jaccard_coefficient
-from networkx.algorithms.link_prediction.adamic_adar_index import adamic_adar_index
-from networkx.algorithms.link_prediction.preferential_attachment import preferential_attachment
-from networkx.algorithms.link_prediction.cn_soundarajan_hopcroft import cn_soundarajan_hopcroft
-from networkx.algorithms.link_prediction.ra_index_soundarajan_hopcroft import ra_index_soundarajan_hopcroft
-from networkx.algorithms.link_prediction.within_inter_cluster import within_inter_cluster
-from networkx.algorithms.link_prediction.common_neighbor_centrality import common_neighbor_centrality
+from networkx.algorithms.link_prediction import resource_allocation_index, jaccard_coefficient,\
+adamic_adar_index, preferential_attachment, cn_soundarajan_hopcroft, ra_index_soundarajan_hopcroft, within_inter_cluster, common_neighbor_centrality
+from networkx.algorithms.communicability_alg import communicability
 from torch_geometric.utils.convert import to_networkx
 from torch_geometric.data import Data
 
@@ -85,10 +79,10 @@ def compute_all_attributes(d):
     jaccard_t = jaccard_coefficient(d_nx)
     adamic_t = adamic_adar_index(d_nx)
     preferential_t = preferential_attachment(d_nx)
-    cn_soundarajan_t = cn_soundarajan_hopcroft(d_nx)
-    ra_index_t = ra_index_soundarajan_hopcroft(d_nx)
-    centrality_t = common_neighbor_centrality(d_nx)
-    cluster_t = within_inter_cluster(d_nx)
+    # cn_soundarajan_t = cn_soundarajan_hopcroft(d_nx)
+    # ra_index_t = ra_index_soundarajan_hopcroft(d_nx)
+    # centrality_t = common_neighbor_centrality(d_nx)
+    # cluster_t = within_inter_cluster(d_nx)
 
     for i in range(d.x.size(0)):
         for j in range(d.x.size(0)):
@@ -103,10 +97,10 @@ def compute_all_attributes(d):
     jaccard_max, jaccard_index, jaccard_attr = tuple_fetch(d.x.size(0), jaccard_t)
     adamic_max, adamic_index, adamic_attr = tuple_fetch(d.x.size(0), adamic_t)
     preferential_max, preferential_index, preferential_attr = tuple_fetch(d.x.size(0), preferential_t)
-    cn_soundarajan_max, cn_soundarajan_index, cn_soundarajan_attr = tuple_fetch(d.x.size(0), cn_soundarajan_t)
-    ra_index_max, ra_index_index, ra_index_attr  = tuple_fetch(d.x.size(0), ra_index_t)
-    centrality_max, centrality_index, centrality_attr = tuple_fetch(d.x.size(0), centrality_t)
-    cluster_max, cluster_index, cluster_attr = tuple_fetch(d.x.size(0), cluster_t)
+    # cn_soundarajan_max, cn_soundarajan_index, cn_soundarajan_attr = tuple_fetch(d.x.size(0), cn_soundarajan_t)
+    # ra_index_max, ra_index_index, ra_index_attr = tuple_fetch(d.x.size(0), ra_index_t)
+    # centrality_max, centrality_index, centrality_attr = tuple_fetch(d.x.size(0), centrality_t)
+    # cluster_max, cluster_index, cluster_attr = tuple_fetch(d.x.size(0), cluster_t)
 
     return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr,
                 com_index=com_index, com_attr=com_attr, com_max=com_max,
@@ -114,10 +108,10 @@ def compute_all_attributes(d):
                 jaccard_max=jaccard_max, jaccard_index=jaccard_index, jaccard_attr=jaccard_attr,
                 adamic_max=adamic_max, adamic_index=adamic_index, adamic_attr=adamic_attr,
                 preferential_max=preferential_max, preferential_index=preferential_index, preferential_attr=preferential_attr,
-                cn_soundarajan_max=cn_soundarajan_max, cn_soundarajan_index=cn_soundarajan_index, cn_soundarajan_attr=cn_soundarajan_attr,
-                ra_index_max=ra_index_max, ra_index_index=ra_index_index, ra_index_attr=ra_index_attr,
-                centrality_max=centrality_max, centrality_index=centrality_index, centrality_attr=centrality_attr,
-                cluster_max=cluster_max, cluster_index=cluster_index, cluster_attr=cluster_attr
+                # cn_soundarajan_max=cn_soundarajan_max, cn_soundarajan_index=cn_soundarajan_index, cn_soundarajan_attr=cn_soundarajan_attr,
+                # ra_index_max=ra_index_max, ra_index_index=ra_index_index, ra_index_attr=ra_index_attr,
+                # centrality_max=centrality_max, centrality_index=centrality_index, centrality_attr=centrality_attr
+                # cluster_max=cluster_max, cluster_index=cluster_index, cluster_attr=cluster_attr
                 )
 
 
