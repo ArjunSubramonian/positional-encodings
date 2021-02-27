@@ -238,12 +238,12 @@ class GraphTransformerModel(nn.Module):
         self.relation_type = args.relation_type
         self.max_vocab = args.max_vocab
         self.relation_encoder = nn.Embedding(args.max_vocab, args.embed_dim)
-        
+
         self.k = args.k_hop_neighbors
-        
+        self.bin = args.bin
+
     def forward(self, src, src_mask=None):
         x, mask = to_dense_batch(self.encoder(src.x), batch=src.batch, fill_value=0)
-        # print("1 place src.batch {}".format(src.batch))
         x = x.transpose(0, 1)
         
         if self.k is not None:
@@ -263,11 +263,27 @@ class GraphTransformerModel(nn.Module):
             # print("src.batch {}".format(src.batch))
             relation = self.relation_encoder(to_dense_adj(src.sd_edge_index, batch=src.batch, edge_attr=mod_sd_edge_attr,
                                                           max_num_nodes=x.size(0)).long())
-        elif self.relation_type in type_of_encoding:
-            other_edge_attr = torch.clamp(src.other_edge_attr.reshape(-1), 0, self.max_vocab - 1).long()
+        elif self.relation_type == "connectivity":
+            other_edge_attr = torch.clamp(src.other_edge_attr.reshape(-1), 0, self.max_feature - 1).long()  # just to ensure
             relation = self.relation_encoder(
-                to_dense_adj(src.other_edge_index.long(), batch=src.batch, edge_attr=other_edge_attr,
+                to_dense_adj(src.other_edge_index.long(), batch=src.batch, edge_attr=other_edge_attr.long(),
                              max_num_nodes=x.size(0)).long())
+        ## continous
+        elif self.relation_type in type_of_encoding:
+            if self.bin is None or self.bin == 0:
+                raise ValueError("Examine the max & set the bin size to a non-zero value first")
+            else:
+                ### change according to the encodings ###
+                value_max = src.jaccard_max + 10
+                bin_size = value_max/self.max_vocab
+                other_edge_index = src.jaccard_index.long()
+                other_edge_attr = torch.clamp(src.jaccard_attr.reshape(-1), 0, value_max - 1)
+                other_edge_attr = (other_edge_attr / bin_size).int().long()
+                ### change according to the encodings ###
+                relation = self.relation_encoder(
+                                to_dense_adj(other_edge_index,
+                                batch=src.batch, edge_attr=other_edge_attr,
+                                max_num_nodes=x.size(0)).long())
         else:
             raise ValueError("Invalid relation type.")
         

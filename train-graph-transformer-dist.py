@@ -12,8 +12,7 @@ import ogb
 from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
 
 from graph_transformer import GraphTransformerModel
-from utils import compute_mutual_shortest_distances, compute_all_node_connectivity, compute_edge_betweenness_centrality, \
-                    compute_clique_number, type_of_encoding
+from utils import compute_mutual_shortest_distances, compute_all_node_connectivity, compute_all_attributes, type_of_encoding
 
 import torch.multiprocessing as mp
 import torch.distributed as dist
@@ -63,23 +62,22 @@ args.ff_embed_dim = 640
 args.num_heads = 8
 args.graph_layers = 4
 args.dropout = 0.4
-args.relation_type = "connectivity"
-args.pre_transform = compute_all_node_connectivity
-args.max_vocab = 6
+args.relation_type = "jaccard_coefficient"
+args.pre_transform = compute_all_attributes
+args.max_vocab = 150
 args.split = 'scaffold'
 args.num_epochs = 200
-args.k_hop_neighbors = None
+args.k_hop_neighbors = 8
 args.weights_dropout = True
 args.grad_acc = 48
 args.cycle_steps = -1
 args.warmup_steps = -1
 
-
 # %%
 def init_process(rank, size, backend='gloo'):
     """ Initialize the distributed environment. """
     os.environ['MASTER_ADDR'] = '127.0.0.1'
-    os.environ['MASTER_PORT'] = '29500'
+    os.environ['MASTER_PORT'] = '29502'
     dist.init_process_group(backend, rank=rank, world_size=size)
 
 def train(rank, num_epochs, world_size):
@@ -203,13 +201,13 @@ def train(rank, num_epochs, world_size):
             if result_dict[args.eval_metric] >= best_valid_score:
                 torch.save(
                     model.state_dict(),
-                    f'./models/model_{epoch + 1}_{args.dataset}_lr{args.lr}.pth'
+                    f'./models/{args.pre_transform}_model_{epoch + 1}_{args.dataset}_lr{args.lr}.pth'
                 )
                 best_valid_score = result_dict[args.eval_metric]
 
         
 if __name__=="__main__":
-    os.environ['CUDA_VISIBLE_DEVICES'] = '2,3'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '5,4'
     WORLD_SIZE = torch.cuda.device_count()
     mp.spawn(
         train, args=(args.num_epochs, WORLD_SIZE),
