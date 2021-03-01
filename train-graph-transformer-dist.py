@@ -24,30 +24,31 @@ import datetime
 from warmup_scheduler import GradualWarmupScheduler
 
 parser = argparse.ArgumentParser(description='PyTorch implementation of relative positional encodings and relation-aware self-attention for graph Transformers')
-args = parser.parse_args("")
+parser.add_argument('-k', type=int, default=2, dest='k_hop_neighbors')
+args = parser.parse_args()
 args.device = 0
 args.device = torch.device('cuda:'+ str(args.device) if torch.cuda.is_available() else 'cpu')
 # args.device = torch.device('cpu')
 print("device:", args.device)
 # torch.cuda.set_device(args.device)
 
-# torch.manual_seed(0)
-# np.random.seed(0)
-# if torch.cuda.is_available():
-#     torch.cuda.manual_seed_all(0)
+torch.manual_seed(0)
+np.random.seed(0)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(0)
 
-# def set_seed(seed):
-#     torch.manual_seed(seed)
-#     np.random.seed(seed)
-#     random.seed(seed)
-#     if torch.cuda.is_available():
-#         torch.cuda.manual_seed_all(seed)
+def set_seed(seed):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
-# seed = 0
-# set_seed(seed)
+seed = 0
+set_seed(seed)
 
-# torch.backends.cudnn.deterministic = True
-# torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 # %%
 args.dataset = 'ogbg-molhiv'
@@ -67,7 +68,7 @@ args.pre_transform = compute_mutual_shortest_distances
 args.max_vocab = 12
 args.split = 'scaffold'
 args.num_epochs = 200
-args.k_hop_neighbors = 2
+# args.k_hop_neighbors = 2
 args.weights_dropout = True
 args.grad_acc = 48
 args.cycle_steps = -1
@@ -86,6 +87,7 @@ def train(rank, num_epochs, world_size):
     init_process(rank, world_size)
     
     if rank == 0:
+        print("k =", args.k_hop_neighbors)
         print("Loading data...")
         print("dataset: {} ".format(args.dataset))
         dataset = PygGraphPropPredDataset(name=args.dataset, pre_transform=args.pre_transform)
@@ -135,9 +137,10 @@ def train(rank, num_epochs, world_size):
     evaluator = Evaluator(name=args.dataset)
 
     if rank == 0:
-        args.writer = SummaryWriter(log_dir='runs/molhiv/' + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+        args.writer = SummaryWriter(log_dir=f'runs/molhiv/k={args.k_hop_neighbors}/' + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     
     best_valid_score = -1
+    best_valid_epoch = -1
     num_iters = 0
     for epoch in range(num_epochs):
         ############
@@ -213,9 +216,13 @@ def train(rank, num_epochs, world_size):
             if result_dict[args.eval_metric] >= best_valid_score:
                 torch.save(
                     model.state_dict(),
-                    f'./models/model_{epoch + 1}_{args.dataset}_lr{args.lr}.pth'
+                    f'./models/model_{epoch + 1}_{args.dataset}_lr{args.lr}_k{args.k_hop_neighbors}.pth'
                 )
                 best_valid_score = result_dict[args.eval_metric]
+                best_valid_epoch = epoch + 1
+    
+    if rank == 0:
+        print(f'k={args.k_hop_neighbors}, best valid epoch={best_valid_epoch}, best valid score={best_valid_score}')
         
 if __name__=="__main__":
     os.environ['CUDA_VISIBLE_DEVICES']='1,2,3,4,5,6'
