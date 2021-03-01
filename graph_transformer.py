@@ -284,9 +284,9 @@ from torch_geometric.nn import GCNConv, GATConv
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.nn.inits import glorot, uniform
 from torch_geometric.utils import softmax
-from ogb.graphproppred.mol_encoder import AtomEncoder, BondEncoder
 import math
 from torch_geometric.nn import global_mean_pool
+from utils import ModifiedAtomEncoder, ModifiedBondEncoder
 
 class RelEncoding(nn.Module):
     def __init__(self, n_hid, max_len = 240, dropout = 0.2):
@@ -300,7 +300,7 @@ class RelEncoding(nn.Module):
 class GT(nn.Module):
     def __init__(self, n_hid, n_out, n_heads, n_layers, edge_dim_dict, dropout = 0.2):
         super(GT, self).__init__()
-        self.node_encoder = AtomEncoder(emb_dim=n_hid)
+        self.node_encoder = ModifiedAtomEncoder(emb_dim=n_hid)
         self.n_hid     = n_hid
         self.n_out     = n_out
         self.drop      = nn.Dropout(dropout)
@@ -309,12 +309,13 @@ class GT(nn.Module):
         self.out       = nn.Linear(n_hid, n_out)
 
     def forward(self, node_attr, batch_idx, edge_index, strats):
-        # strats: cn_edge_attr, sd_edge_attr, etc.
+        # strats: edge_attr, cn_edge_attr, sd_edge_attr, etc.
         node_rep = self.node_encoder(node_attr)
         for gc in self.gcs:
             node_rep = gc(node_rep, edge_index, strats)
         # TODO: change to use virtual node
-        return self.out(global_mean_pool(node_rep, batch_idx))  
+        # return self.out(global_mean_pool(node_rep, batch_idx))
+        return self.out(node_rep[node_attr.sum(dim=1) < 0])
 
 class GT_Layer(MessagePassing):
     def __init__(self, n_hid, n_heads, edge_dim_dict, dropout = 0.2, **kwargs):
@@ -336,8 +337,10 @@ class GT_Layer(MessagePassing):
         
         self.struc_enc = nn.ModuleDict({
             key : RelEncoding(max_len = edge_dim_dict[key], n_hid = n_hid, dropout = dropout)
-                for key in edge_dim_dict
+                for key in edge_dim_dict if key != 'ea'
         })
+        if 'ea' in edge_dim_dict:
+            self.struc_enc['ea'] = ModifiedBondEncoder(emb_dim=n_hid, dropout = dropout)
         
         self.mid_linear  = nn.Linear(n_hid,  n_hid * 2)
         self.out_linear  = nn.Linear(n_hid * 2,  n_hid)
@@ -357,9 +360,11 @@ class GT_Layer(MessagePassing):
         '''
                 
         target_node_vec = node_inp_i
-        source_node_vec = node_inp_j
+        source_node_vec = node_inp_j 
         for key in self.struc_enc:
-            source_node_vec += self.struc_enc[key](strats[key])
+            print(key, self.struc_enc[key](strats[key]).size())
+            if key != 'ea':
+                source_node_vec += self.struc_enc[key](strats[key])
 
         q_mat = self.q_linear(target_node_vec).view(-1, self.n_heads, self.d_k)
         k_mat = self.k_linear(source_node_vec).view(-1, self.n_heads, self.d_k)
