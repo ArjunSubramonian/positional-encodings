@@ -362,7 +362,7 @@ class GT_Layer(MessagePassing):
         target_node_vec = node_inp_i
         source_node_vec = node_inp_j 
         for key in self.struc_enc:
-            print(key, self.struc_enc[key](strats[key]).size())
+            # print(key, self.struc_enc[key](strats[key]).size())
             if key != 'ea':
                 source_node_vec += self.struc_enc[key](strats[key])
 

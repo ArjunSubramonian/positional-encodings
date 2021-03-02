@@ -103,6 +103,7 @@ def pre_process(d):
     d_nx = to_networkx(d, to_undirected=True)
     
     #     Augment the graph to be K-hop graph
+    # difficult to decide edge_attr for new edges
     dense_orig_adj = to_dense_adj(d.edge_index, max_num_nodes=node_size).squeeze(dim=0).long()
     pow_dense_orig_adj = dense_orig_adj.clone()
     new_dense_orig_adj = dense_orig_adj.clone()
