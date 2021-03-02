@@ -83,10 +83,8 @@ from torch_geometric.data import Data
 from torch_geometric.utils import to_dense_adj, dense_to_sparse
 import torch.nn.functional as F
 
-K_HOP_NEIGHBORS = 6
-
-def pre_process(d):
-    #     TODO: add summary node that connects to all the other nodes.
+def pre_process(d, args):
+    # add summary node that connects to all the other nodes.
     # append row of -1's as raw features of summary node (modified AtomEncoder will specially handle all -1's)
     d.x = torch.cat([d.x, -torch.ones(1, d.x.size(1)).long()])
     node_size = d.x.size(0)
@@ -103,14 +101,18 @@ def pre_process(d):
     d_nx = to_networkx(d, to_undirected=True)
     
     #     Augment the graph to be K-hop graph
-    # difficult to decide edge_attr for new edges
     dense_orig_adj = to_dense_adj(d.edge_index, max_num_nodes=node_size).squeeze(dim=0).long()
+    dense_orig_edge_attr = to_dense_adj(d.edge_index, edge_attr=d.edge_attr, max_num_nodes=node_size).squeeze(dim=0).long()
     pow_dense_orig_adj = dense_orig_adj.clone()
     new_dense_orig_adj = dense_orig_adj.clone()
-    for k in range(2, K_HOP_NEIGHBORS + 1):
+    for k in range(2, args.k_hop_neighbors + 1):
         pow_dense_orig_adj = torch.mm(pow_dense_orig_adj, dense_orig_adj)
         new_dense_orig_adj |= F.hardtanh(pow_dense_orig_adj)
     d.edge_index = dense_to_sparse(new_dense_orig_adj)[0]
+    
+    dense_extra_adj = new_dense_orig_adj - dense_orig_adj
+    dense_orig_edge_attr[dense_extra_adj.bool()] = -2 * torch.ones(dense_orig_edge_attr.size(-1)).long()
+    d.edge_attr = dense_orig_edge_attr[d.edge_index[0], d.edge_index[1]]
     
     #     Calculate structural feature by the ORIGNAL graph, add them to new edge set.
     sd_edge_attr = shortest_distances(d_nx, d.edge_index)
@@ -157,7 +159,7 @@ full_bond_feature_dims = get_bond_feature_dims()
 
 class ModifiedAtomEncoder(torch.nn.Module):
 
-    def __init__(self, emb_dim):
+    def __init__(self, emb_dim, summary_node = True):
         super(ModifiedAtomEncoder, self).__init__()
         
         self.atom_embedding_list = torch.nn.ModuleList()
@@ -167,8 +169,10 @@ class ModifiedAtomEncoder(torch.nn.Module):
             torch.nn.init.xavier_uniform_(emb.weight.data)
             self.atom_embedding_list.append(emb)
         
-        self.summary_node_embedding = torch.nn.Parameter(torch.empty(1, emb_dim))
-        torch.nn.init.xavier_uniform_(self.summary_node_embedding.data)
+        if summary_node:
+            self.summary_node_embedding = torch.nn.Parameter(torch.empty(1, emb_dim))
+            torch.nn.init.xavier_uniform_(self.summary_node_embedding.data)
+        self.summary_node = summary_node
 
     def forward(self, x):
         mask = x.sum(dim=1) >= 0  # mask of all non-summary nodes
@@ -179,13 +183,16 @@ class ModifiedAtomEncoder(torch.nn.Module):
         
         mod_x_embedding = torch.empty(x.size(0), x_embedding.size(1), device=x.get_device())
         mod_x_embedding[mask] = x_embedding
-        mod_x_embedding[~mask] = self.summary_node_embedding
-    
+        if self.summary_node:
+            mod_x_embedding[~mask] = self.summary_node_embedding
+        else:
+            mod_x_embedding[~mask] = 0
+
         return mod_x_embedding
 
 class ModifiedBondEncoder(torch.nn.Module):
     
-    def __init__(self, emb_dim, dropout = 0.2):
+    def __init__(self, emb_dim, dropout = 0.2, summary_node = True):
         super(ModifiedBondEncoder, self).__init__()
         
         self.bond_embedding_list = torch.nn.ModuleList()
@@ -195,13 +202,17 @@ class ModifiedBondEncoder(torch.nn.Module):
             torch.nn.init.xavier_uniform_(emb.weight.data)
             self.bond_embedding_list.append(emb)
 
-        self.summary_link_embedding = torch.nn.Parameter(torch.empty(1, emb_dim))
-        torch.nn.init.xavier_uniform_(self.summary_link_embedding.data)
+        if summary_node:
+            self.summary_link_embedding = torch.nn.Parameter(torch.empty(1, emb_dim))
+            torch.nn.init.xavier_uniform_(self.summary_link_embedding.data)
+        self.summary_node = summary_node
         
         self.drop = torch.nn.Dropout(dropout)
         
     def forward(self, edge_attr):
         mask = edge_attr.sum(dim=1) >= 0  # mask of all non-summary links
+        mask_summary = edge_attr.sum(dim=1) == -edge_attr.size(1)
+        mask_k_hops = edge_attr.sum(dim=1) == -2 * edge_attr.size(1) # k-hop neighbors, k > 1
         
         bond_embedding = 0
         for i in range(edge_attr[mask].shape[1]):
@@ -209,6 +220,10 @@ class ModifiedBondEncoder(torch.nn.Module):
         
         mod_bond_embedding = torch.empty(edge_attr.size(0), bond_embedding.size(1), device=edge_attr.get_device())
         mod_bond_embedding[mask] = bond_embedding
-        mod_bond_embedding[~mask] = self.summary_link_embedding
-
+        if self.summary_node:
+            mod_bond_embedding[mask_summary] = self.summary_link_embedding
+            mod_bond_embedding[mask_k_hops] = 0
+        else:
+            mod_bond_embedding[~mask] = 0
+            
         return self.drop(mod_bond_embedding)

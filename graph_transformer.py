@@ -298,27 +298,30 @@ class RelEncoding(nn.Module):
         return self.drop(self.emb(t))
 
 class GT(nn.Module):
-    def __init__(self, n_hid, n_out, n_heads, n_layers, edge_dim_dict, dropout = 0.2):
+    def __init__(self, n_hid, n_out, n_heads, n_layers, edge_dim_dict, dropout = 0.2, summary_node = True):
         super(GT, self).__init__()
-        self.node_encoder = ModifiedAtomEncoder(emb_dim=n_hid)
+        self.node_encoder = ModifiedAtomEncoder(emb_dim=n_hid, summary_node=summary_node)
         self.n_hid     = n_hid
         self.n_out     = n_out
         self.drop      = nn.Dropout(dropout)
-        self.gcs       = nn.ModuleList([GT_Layer(n_hid, n_heads, edge_dim_dict, dropout)\
+        self.gcs       = nn.ModuleList([GT_Layer(n_hid, n_heads, edge_dim_dict, dropout, summary_node)\
                                       for _ in range(n_layers)])
         self.out       = nn.Linear(n_hid, n_out)
+        self.summary_node = summary_node
 
     def forward(self, node_attr, batch_idx, edge_index, strats):
         # strats: edge_attr, cn_edge_attr, sd_edge_attr, etc.
         node_rep = self.node_encoder(node_attr)
         for gc in self.gcs:
             node_rep = gc(node_rep, edge_index, strats)
-        # TODO: change to use virtual node
-        # return self.out(global_mean_pool(node_rep, batch_idx))
-        return self.out(node_rep[node_attr.sum(dim=1) < 0])
+        if self.summary_node:
+            # change to use virtual node
+            return self.out(node_rep[node_attr.sum(dim=1) < 0])
+        return self.out(global_mean_pool(node_rep, batch_idx))
+        
 
 class GT_Layer(MessagePassing):
-    def __init__(self, n_hid, n_heads, edge_dim_dict, dropout = 0.2, **kwargs):
+    def __init__(self, n_hid, n_heads, edge_dim_dict, dropout = 0.2, summary_node = True, **kwargs):
         super(GT_Layer, self).__init__(node_dim=0, aggr='add', **kwargs)
 
         self.n_hid         = n_hid
@@ -340,7 +343,7 @@ class GT_Layer(MessagePassing):
                 for key in edge_dim_dict if key != 'ea'
         })
         if 'ea' in edge_dim_dict:
-            self.struc_enc['ea'] = ModifiedBondEncoder(emb_dim=n_hid, dropout = dropout)
+            self.struc_enc['ea'] = ModifiedBondEncoder(emb_dim=n_hid, dropout = dropout, summary_node = summary_node)
         
         self.mid_linear  = nn.Linear(n_hid,  n_hid * 2)
         self.out_linear  = nn.Linear(n_hid * 2,  n_hid)
@@ -362,7 +365,7 @@ class GT_Layer(MessagePassing):
         target_node_vec = node_inp_i
         source_node_vec = node_inp_j 
         for key in self.struc_enc:
-            # print(key, self.struc_enc[key](strats[key]).size())
+            # TODO (low priority): learn different embeddings for different values of k hops
             if key != 'ea':
                 source_node_vec += self.struc_enc[key](strats[key])
 
