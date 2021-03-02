@@ -296,3 +296,115 @@ class GraphTransformerModel(nn.Module):
         graph_pred = self.task_pred(graph_emb)
         
         return graph_pred
+
+
+# +
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.autograd import Variable
+from torch_geometric.nn import GCNConv, GATConv
+from torch_geometric.nn.conv import MessagePassing
+from torch_geometric.nn.inits import glorot, uniform
+from torch_geometric.utils import softmax
+import math
+from torch_geometric.nn import global_mean_pool
+from utils import ModifiedAtomEncoder, ModifiedBondEncoder
+
+class RelEncoding(nn.Module):
+    def __init__(self, n_hid, max_len = 240, dropout = 0.2):
+        super(RelEncoding, self).__init__()
+        self.emb = nn.Embedding(max_len, n_hid)
+        self.drop = nn.Dropout(dropout)
+        self.emb.weight.data.uniform_(-0.1, 0.1)
+    def forward(self, t):
+        return self.drop(self.emb(t))
+
+class GT(nn.Module):
+    def __init__(self, n_hid, n_out, n_heads, n_layers, edge_dim_dict, dropout = 0.2):
+        super(GT, self).__init__()
+        self.node_encoder = ModifiedAtomEncoder(emb_dim=n_hid)
+        self.n_hid     = n_hid
+        self.n_out     = n_out
+        self.drop      = nn.Dropout(dropout)
+        self.gcs       = nn.ModuleList([GT_Layer(n_hid, n_heads, edge_dim_dict, dropout)\
+                                      for _ in range(n_layers)])
+        self.out       = nn.Linear(n_hid, n_out)
+
+    def forward(self, node_attr, batch_idx, edge_index, strats):
+        # strats: edge_attr, cn_edge_attr, sd_edge_attr, etc.
+        node_rep = self.node_encoder(node_attr)
+        for gc in self.gcs:
+            node_rep = gc(node_rep, edge_index, strats)
+        # TODO: change to use virtual node
+        # return self.out(global_mean_pool(node_rep, batch_idx))
+        return self.out(node_rep[node_attr.sum(dim=1) < 0])
+
+class GT_Layer(MessagePassing):
+    def __init__(self, n_hid, n_heads, edge_dim_dict, dropout = 0.2, **kwargs):
+        super(GT_Layer, self).__init__(node_dim=0, aggr='add', **kwargs)
+
+        self.n_hid         = n_hid
+        self.n_heads       = n_heads
+        self.d_k           = n_hid // n_heads
+        self.sqrt_dk       = math.sqrt(self.d_k)
+        self.att           = None
+        
+        
+        self.k_linear   = nn.Linear(n_hid,   n_hid)
+        self.q_linear   = nn.Linear(n_hid,   n_hid)
+        self.v_linear   = nn.Linear(n_hid,   n_hid)
+        self.a_linear   = nn.Linear(n_hid,   n_hid)
+        self.norm       = nn.LayerNorm(n_hid)
+        self.drop       = nn.Dropout(dropout)
+        
+        self.struc_enc = nn.ModuleDict({
+            key : RelEncoding(max_len = edge_dim_dict[key], n_hid = n_hid, dropout = dropout)
+                for key in edge_dim_dict if key != 'ea'
+        })
+        if 'ea' in edge_dim_dict:
+            self.struc_enc['ea'] = ModifiedBondEncoder(emb_dim=n_hid, dropout = dropout)
+        
+        self.mid_linear  = nn.Linear(n_hid,  n_hid * 2)
+        self.out_linear  = nn.Linear(n_hid * 2,  n_hid)
+        self.out_norm    = nn.LayerNorm(n_hid)
+        
+    def forward(self, node_inp, edge_index, strats):
+        return self.propagate(edge_index, node_inp=node_inp, \
+                              strats=strats)
+
+    def message(self, edge_index_i, node_inp_i, node_inp_j, strats):
+        '''
+            j: source, i: target; <j, i>
+        '''
+        data_size = edge_index_i.size(0)
+        '''
+            Create Attention and Message tensor beforehand.
+        '''
+                
+        target_node_vec = node_inp_i
+        source_node_vec = node_inp_j 
+        for key in self.struc_enc:
+            print(key, self.struc_enc[key](strats[key]).size())
+            if key != 'ea':
+                source_node_vec += self.struc_enc[key](strats[key])
+
+        q_mat = self.q_linear(target_node_vec).view(-1, self.n_heads, self.d_k)
+        k_mat = self.k_linear(source_node_vec).view(-1, self.n_heads, self.d_k)
+        v_mat = self.v_linear(source_node_vec).view(-1, self.n_heads, self.d_k)
+        
+        '''
+            Softmax based on target node's id (edge_index_i). Store attention value in self.att for later visualization.
+        '''
+        self.att = self.drop(softmax((q_mat * k_mat).sum(dim=-1) / self.sqrt_dk, edge_index_i))
+        res = v_mat * self.att.view(-1, self.n_heads, 1)
+        return res.view(-1, self.n_hid)
+
+
+    def update(self, aggr_out, node_inp):
+        trans_out = self.norm(self.drop(self.a_linear(F.gelu(aggr_out))) + node_inp)
+        trans_out = self.out_norm(self.drop(self.out_linear(F.gelu(self.mid_linear(trans_out)))) + trans_out)
+        return trans_out
+# -
+
+

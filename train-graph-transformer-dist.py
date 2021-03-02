@@ -23,11 +23,12 @@ import datetime
 
 from warmup_scheduler import GradualWarmupScheduler
 
-parser = argparse.ArgumentParser(description='PyTorch implementation of relative positional '
-                                             'encodings and relation-aware self-attention for graph Transformers')
-args = parser.parse_args("")
-args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+parser = argparse.ArgumentParser(description='PyTorch implementation of relative positional encodings and relation-aware self-attention for graph Transformers')
+parser.add_argument('-k', type=int, default=2, dest='k_hop_neighbors')
+args = parser.parse_args()
+args.device = 0
+args.device = torch.device('cuda:'+ str(args.device) if torch.cuda.is_available() else 'cpu')
 print("device:", args.device)
 # torch.cuda.set_device(args.device)
 
@@ -67,11 +68,11 @@ args.pre_transform = compute_all_attributes
 args.max_vocab = 120
 args.split = 'scaffold'
 args.num_epochs = 200
-args.k_hop_neighbors = 8
 args.weights_dropout = True
 args.grad_acc = 48
 args.cycle_steps = -1
 args.warmup_steps = -1
+args.weight_decay = 0.01
 
 # %%
 def init_process(rank, size, backend='gloo'):
@@ -114,21 +115,27 @@ def train(rank, num_epochs, world_size):
     model = GraphTransformerModel(args).cuda(rank)
     model = DistributedDataParallel(model, device_ids=[rank])
     batch_device = torch.device('cuda:'+ str(rank) if torch.cuda.is_available() else 'cpu')
-
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    # args.warmup_steps = len(train_loader) // args.grad_acc
+    no_decay = ["bias", "LayerNorm.weight"]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+            "weight_decay": args.weight_decay,
+        },
+        {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
+    ]
+    optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.lr)
     args.warmup_steps = 1000
-    # args.cycle_steps = 5 * args.warmup_steps
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=args.cycle_steps)
-    scheduler = None
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr, steps_per_epoch=len(train_loader) // args.grad_acc, epochs=num_epochs)
     scheduler_warmup = GradualWarmupScheduler(optimizer, multiplier=1, total_epoch=args.warmup_steps, after_scheduler=scheduler)
     criterion = torch.nn.BCEWithLogitsLoss(reduction = "mean")
     evaluator = Evaluator(name=args.dataset)
 
     if rank == 0:
-        args.writer = SummaryWriter(log_dir='runs/molhiv/' + args.relation_type + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+        args.writer = SummaryWriter(log_dir=f'runs/molhiv/k={args.k_hop_neighbors}/'
+                                            + args.relation_type +"/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     
     best_valid_score = -1
+    best_valid_epoch = -1
     num_iters = 0
     for epoch in range(num_epochs):
         ############
@@ -229,10 +236,13 @@ def train(rank, num_epochs, world_size):
             if result_dict[args.eval_metric] >= best_valid_score:
                 torch.save(
                     model.state_dict(),
-                    f'./models/{args.relation_type}_model_{epoch + 1}_{args.dataset}_lr{args.lr}.pth'
+                    f'./models/model_{epoch + 1}_{args.dataset}_lr{args.lr}_k{args.k_hop_neighbors}.pth'
                 )
                 best_valid_score = result_dict[args.eval_metric]
-
+                best_valid_epoch = epoch + 1
+    
+    if rank == 0:
+        print(f'k={args.k_hop_neighbors}, best valid epoch={best_valid_epoch}, best valid score={best_valid_score}')
         
 if __name__=="__main__":
     os.environ['CUDA_VISIBLE_DEVICES'] = '5,2'
