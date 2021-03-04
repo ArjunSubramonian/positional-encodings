@@ -370,7 +370,7 @@ class GT_Layer(MessagePassing):
             if self.summary_node:
                 if key != 'ea':
                     attr = strats[key]
-                    mask = attr.sum(dim=1) >= 0
+                    mask = attr >= 0
                     attr_emb = self.struc_enc[key](attr[mask])
                     mod_attr_emb = torch.empty(attr.size(0), attr_emb.size(1), device=attr.get_device())
                     mod_attr_emb[mask] = attr_emb
