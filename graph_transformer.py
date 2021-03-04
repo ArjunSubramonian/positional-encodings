@@ -348,6 +348,7 @@ class GT_Layer(MessagePassing):
         self.mid_linear  = nn.Linear(n_hid,  n_hid * 2)
         self.out_linear  = nn.Linear(n_hid * 2,  n_hid)
         self.out_norm    = nn.LayerNorm(n_hid)
+        self.summary_node = summary_node
         
     def forward(self, node_inp, edge_index, strats):
         return self.propagate(edge_index, node_inp=node_inp, \
@@ -366,8 +367,19 @@ class GT_Layer(MessagePassing):
         source_node_vec = node_inp_j 
         for key in self.struc_enc:
             # TODO (low priority): learn different embeddings for different values of k hops
-            if key != 'ea':
+            if self.summary_node:
+                if key != 'ea':
+                    attr = strats[key]
+                    mask = attr.sum(dim=1) >= 0
+                    attr_emb = self.struc_enc[key](attr[mask])
+                    mod_attr_emb = torch.empty(attr.size(0), attr_emb.size(1), device=attr.get_device())
+                    mod_attr_emb[mask] = attr_emb
+                    mod_attr_emb[~mask] = 0
+                else:
+                    source_node_vec += self.struc_enc[key](strats[key])
+            else:
                 source_node_vec += self.struc_enc[key](strats[key])
+                
 
         q_mat = self.q_linear(target_node_vec).view(-1, self.n_heads, self.d_k)
         k_mat = self.k_linear(source_node_vec).view(-1, self.n_heads, self.d_k)

@@ -84,18 +84,7 @@ from torch_geometric.utils import to_dense_adj, dense_to_sparse
 import torch.nn.functional as F
 
 def pre_process(d, args):
-    # add summary node that connects to all the other nodes.
-    # append row of -1's as raw features of summary node (modified AtomEncoder will specially handle all -1's)
-    d.x = torch.cat([d.x, -torch.ones(1, d.x.size(1)).long()])
     node_size = d.x.size(0)
-    # okay to add self-loop to summary node
-    # don't need to coalesce
-    # append columns to edge_index to connect summary node to all other nodes
-    add_edges = torch.cat([(node_size - 1) * torch.ones(1, node_size).long(), \
-                                torch.arange(node_size).long().reshape(1, -1)])
-    d.edge_index = torch.cat([d.edge_index, add_edges], dim=1)
-    # append rows of -1's as raw features of all new edges (modified BondEncoder will specially handle all -1's)
-    d.edge_attr = torch.cat([d.edge_attr, -torch.ones(node_size, d.edge_attr.size(1)).long()])
     
     #     Construct networkX type of original graph for different metrics
     d_nx = to_networkx(d, to_undirected=True)
@@ -117,6 +106,21 @@ def pre_process(d, args):
     #     Calculate structural feature by the ORIGNAL graph, add them to new edge set.
     sd_edge_attr = shortest_distances(d_nx, d.edge_index)
     cn_edge_attr = node_connectivity(d_nx, d.edge_index)
+    
+    # add summary node that connects to all the other nodes.
+    # append row of -1's as raw features of summary node (modified AtomEncoder will specially handle all -1's)
+    d.x = torch.cat([d.x, -torch.ones(1, d.x.size(1)).long()])
+    # okay to add self-loop to summary node
+    # don't need to coalesce
+    # append columns to edge_index to connect summary node to all other nodes
+    add_edges = torch.cat([(node_size - 1) * torch.ones(1, node_size).long(), \
+                                torch.arange(node_size).long().reshape(1, -1)])
+    d.edge_index = torch.cat([d.edge_index, add_edges], dim=1)
+    # append rows of -1's as raw features of all new edges (modified BondEncoder will specially handle all -1's)
+    d.edge_attr = torch.cat([d.edge_attr, -torch.ones(node_size, d.edge_attr.size(1)).long()])
+    sd_edge_attr = torch.cat([sd_edge_attr, -torch.ones(node_size).long()])
+    cn_edge_attr = torch.cat([cn_edge_attr, -torch.ones(node_size).long()])
+    
     return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, \
          sd_edge_attr=sd_edge_attr, cn_edge_attr=cn_edge_attr)
     
