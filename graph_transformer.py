@@ -309,39 +309,61 @@ from torch_geometric.nn.inits import glorot, uniform
 from torch_geometric.utils import softmax
 import math
 from torch_geometric.nn import global_mean_pool
-from utils import ModifiedAtomEncoder, ModifiedBondEncoder
 
-class RelEncoding(nn.Module):
-    def __init__(self, n_hid, max_len = 240, dropout = 0.2):
-        super(RelEncoding, self).__init__()
-        self.emb = nn.Embedding(max_len, n_hid)
+# class RelEncoding(nn.Module):
+#     def __init__(self, n_hid, max_len = 240, dropout = 0.2):
+#         super(RelEncoding, self).__init__()
+#         self.emb = nn.Embedding(max_len, n_hid)
+#         self.drop = nn.Dropout(dropout)
+#         self.emb.weight.data.uniform_(-0.1, 0.1)
+#     def forward(self, t):
+#         return self.drop(self.emb(t))
+
+class MultiDimRelEncoding(nn.Module):
+    def __init__(self, n_dim, n_hid, max_lens, dropout = 0.2):
+        super(MultiDimRelEncoding, self).__init__()
         self.drop = nn.Dropout(dropout)
-        self.emb.weight.data.uniform_(-0.1, 0.1)
+        self.n_dim = n_dim
+        self.n_hid = n_hid
+        
+        embs = [0] * n_dim
+        for i in range(n_dim):
+            embs[i] = nn.Embedding(max_lens[i], n_hid)
+            embs[i].weight.data.uniform_(-0.1, 0.1)
+        self.embs = nn.ModuleList(embs)
     def forward(self, t):
-        return self.drop(self.emb(t))
+        out = 0
+        for i in range(self.n_dim):
+            out += self.drop(self.embs[i](t[:, i]))
+        return out
 
+    
 class GT(nn.Module):
-    def __init__(self, n_hid, n_out, n_heads, n_layers, edge_dim_dict, dropout = 0.2):
+    def __init__(self, n_hid, n_out, n_heads, n_layers, edge_dim_dict, dropout = 0.2, summary_node = True):
         super(GT, self).__init__()
-        self.node_encoder = ModifiedAtomEncoder(emb_dim=n_hid)
+        self.node_encoder = ModifiedAtomEncoder(emb_dim=n_hid, summary_node=summary_node)
         self.n_hid     = n_hid
         self.n_out     = n_out
         self.drop      = nn.Dropout(dropout)
-        self.gcs       = nn.ModuleList([GT_Layer(n_hid, n_heads, edge_dim_dict, dropout)\
+        self.gcs       = nn.ModuleList([GT_Layer(n_hid, n_heads, edge_dim_dict, dropout, summary_node)\
                                       for _ in range(n_layers)])
         self.out       = nn.Linear(n_hid, n_out)
+        self.summary_node = summary_node
 
     def forward(self, node_attr, batch_idx, edge_index, strats):
         # strats: edge_attr, cn_edge_attr, sd_edge_attr, etc.
         node_rep = self.node_encoder(node_attr)
         for gc in self.gcs:
             node_rep = gc(node_rep, edge_index, strats)
-        # TODO: change to use virtual node
-        # return self.out(global_mean_pool(node_rep, batch_idx))
-        return self.out(node_rep[node_attr.sum(dim=1) < 0])
+
+        if self.summary_node:
+            # change to use virtual node
+            return self.out(node_rep[node_attr.sum(dim=1) < 0])
+        return self.out(global_mean_pool(node_rep, batch_idx))
+        
 
 class GT_Layer(MessagePassing):
-    def __init__(self, n_hid, n_heads, edge_dim_dict, dropout = 0.2, **kwargs):
+    def __init__(self, n_hid, n_heads, edge_dim_dict, dropout = 0.2, summary_node = True, **kwargs):
         super(GT_Layer, self).__init__(node_dim=0, aggr='add', **kwargs)
 
         self.n_hid         = n_hid
@@ -359,20 +381,21 @@ class GT_Layer(MessagePassing):
         self.drop       = nn.Dropout(dropout)
         
         self.struc_enc = nn.ModuleDict({
-            key : RelEncoding(max_len = edge_dim_dict[key], n_hid = n_hid, dropout = dropout)
+            key : MultiDimRelEncoding(n_dim=len(edge_dim_dict[key]), n_hid = n_hid, max_lens = edge_dim_dict[key], dropout = dropout)
                 for key in edge_dim_dict if key != 'ea'
         })
+        
         if 'ea' in edge_dim_dict:
-            self.struc_enc['ea'] = ModifiedBondEncoder(emb_dim=n_hid, dropout = dropout)
+            self.struc_enc['ea'] = ModifiedBondEncoder(emb_dim=n_hid, dropout = dropout, summary_node = summary_node)
         
         self.mid_linear  = nn.Linear(n_hid,  n_hid * 2)
         self.out_linear  = nn.Linear(n_hid * 2,  n_hid)
         self.out_norm    = nn.LayerNorm(n_hid)
+        self.summary_node = summary_node
         
     def forward(self, node_inp, edge_index, strats):
-        return self.propagate(edge_index, node_inp=node_inp, \
-                              strats=strats)
-
+        return self.propagate(edge_index, node_inp=node_inp, strats=strats)
+    
     def message(self, edge_index_i, node_inp_i, node_inp_j, strats):
         '''
             j: source, i: target; <j, i>
@@ -381,13 +404,24 @@ class GT_Layer(MessagePassing):
         '''
             Create Attention and Message tensor beforehand.
         '''
-                
         target_node_vec = node_inp_i
         source_node_vec = node_inp_j 
         for key in self.struc_enc:
-            print(key, self.struc_enc[key](strats[key]).size())
-            if key != 'ea':
+            # TODO (low priority): learn different embeddings for different values of k hops
+            if self.summary_node:
+                if key != 'ea':
+                    attr = strats[key]
+                    mask = attr.sum(-1) >= 0
+                    attr_emb = self.struc_enc[key](attr[mask])
+#                     mod_attr_emb = torch.empty(attr.size(0), attr_emb.size(1), device=attr.get_device())
+                    mod_attr_emb = torch.empty(attr.size(0), attr_emb.size(1), device=attr.device)
+                    mod_attr_emb[mask] = attr_emb
+                    mod_attr_emb[~mask] = 0
+                else:
+                    source_node_vec += self.struc_enc[key](strats[key])
+            else:
                 source_node_vec += self.struc_enc[key](strats[key])
+                
 
         q_mat = self.q_linear(target_node_vec).view(-1, self.n_heads, self.d_k)
         k_mat = self.k_linear(source_node_vec).view(-1, self.n_heads, self.d_k)
@@ -408,3 +442,86 @@ class GT_Layer(MessagePassing):
 # -
 
 
+
+
+
+# +
+from ogb.utils.features import get_atom_feature_dims, get_bond_feature_dims 
+
+full_atom_feature_dims = get_atom_feature_dims()
+full_bond_feature_dims = get_bond_feature_dims()
+
+class ModifiedAtomEncoder(torch.nn.Module):
+
+    def __init__(self, emb_dim, summary_node = True):
+        super(ModifiedAtomEncoder, self).__init__()
+        
+        self.atom_embedding_list = torch.nn.ModuleList()
+
+        for i, dim in enumerate(full_atom_feature_dims):
+            emb = torch.nn.Embedding(dim, emb_dim)
+            torch.nn.init.xavier_uniform_(emb.weight.data)
+            self.atom_embedding_list.append(emb)
+        
+        if summary_node:
+            self.summary_node_embedding = torch.nn.Parameter(torch.empty(1, emb_dim))
+            torch.nn.init.xavier_uniform_(self.summary_node_embedding.data)
+        self.summary_node = summary_node
+
+    def forward(self, x):
+        mask = x.sum(dim=1) >= 0  # mask of all non-summary nodes
+        
+        x_embedding = 0
+        for i in range(x[mask].shape[1]):
+            x_embedding += self.atom_embedding_list[i](x[mask][:,i])
+        
+#         mod_x_embedding = torch.empty(x.size(0), x_embedding.size(1), device=x.get_device())
+        mod_x_embedding = torch.empty(x.size(0), x_embedding.size(1), device=x.device)
+
+        mod_x_embedding[mask] = x_embedding
+        if self.summary_node:
+            mod_x_embedding[~mask] = self.summary_node_embedding
+        else:
+            mod_x_embedding[~mask] = 0
+
+        return mod_x_embedding
+
+class ModifiedBondEncoder(torch.nn.Module):
+    
+    def __init__(self, emb_dim, dropout = 0.2, summary_node = True):
+        super(ModifiedBondEncoder, self).__init__()
+        
+        self.bond_embedding_list = torch.nn.ModuleList()
+
+        for i, dim in enumerate(full_bond_feature_dims):
+            emb = torch.nn.Embedding(dim, emb_dim)
+            torch.nn.init.xavier_uniform_(emb.weight.data)
+            self.bond_embedding_list.append(emb)
+
+        if summary_node:
+            self.summary_link_embedding = torch.nn.Parameter(torch.empty(1, emb_dim))
+            torch.nn.init.xavier_uniform_(self.summary_link_embedding.data)
+        self.summary_node = summary_node
+        
+        self.drop = torch.nn.Dropout(dropout)
+        
+    def forward(self, edge_attr):
+        mask = edge_attr.sum(dim=1) >= 0  # mask of all non-summary links
+        mask_summary = edge_attr.sum(dim=1) == - edge_attr.size(1)
+        mask_k_hops = edge_attr.sum(dim=1) == -2 * edge_attr.size(1) # k-hop neighbors, k > 1
+        
+        bond_embedding = 0
+        for i in range(edge_attr[mask].shape[1]):
+            bond_embedding += self.bond_embedding_list[i](edge_attr[mask][:,i])
+        
+#         mod_bond_embedding = torch.empty(edge_attr.size(0), bond_embedding.size(1), device=edge_attr.get_device())
+        mod_bond_embedding = torch.empty(edge_attr.size(0), bond_embedding.size(1), device=edge_attr.device)
+
+        mod_bond_embedding[mask] = bond_embedding
+        if self.summary_node:
+            mod_bond_embedding[mask_summary] = self.summary_link_embedding
+            mod_bond_embedding[mask_k_hops] = 0
+        else:
+            mod_bond_embedding[~mask] = 0
+            
+        return self.drop(mod_bond_embedding)

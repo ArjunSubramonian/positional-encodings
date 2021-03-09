@@ -1,0 +1,32 @@
+----- Bugs and critical changes -----
+
+1. Summary node. For a graph with N nodes {0, ... N-1}, add a new summary node N and connect all nodes to it. 
+1.1 Edges used to be added to N-1 rather than N. Fixed
+1.2 Edges used to be single directional, so no message passing happened. Need to add both edge (i, j) and (j, i). Fixed.
+1.3 Generate two different datasets for graphs with/without summary nodes. Otherwise, when args.summary = False, the training step didn't work for dataset with summary node. Fixed.
+
+2. get_device()
+When device == 'cpu' Tensor.get_device() returns -1 and causes device issue, changed to Tensor.device instead.
+
+----- Useful changes -----
+
+3. RelEncoding -> MultiDimRelEncoding (more general)
+Each RelEncoding now can be multidimensional, e.g. hierarchical shortest distance (hsd) has several hierarchies.
+
+4. pre_process
+4.1. Rewrote function to include both original and augmented edge_idex/edge_attr. Could be useful for visualization and debugging.
+4.2 Split it two versions as mentioned in 1.3 
+
+5. Weighted sampler
+Added another option to use weighted data sampler when creating dataloader. Maybe helpful for unbalanced tasks.
+
+----- Non-essential changes -----
+6. Overfitting happend too quickly. Reduce num_epochs from 100 to 60. Increase it if no longer see overfitting.
+
+7. Add a chuck for plotting at the end of training, so no need to create a new Tensorboard record each time if you don't want to. 
+
+8. Moved get_optimizer to utils 
+
+9. Move ModifiedAtomEncoder & ModifiedBondEncoder from utils.py to graph_transformer.py, so changes in jupyter notebook can be made more easily.
+
+10. Cleaned up code a little bit in all files. 
