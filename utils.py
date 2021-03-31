@@ -5,8 +5,8 @@ import numpy as np
 from torch.optim import AdamW
 from networkx.algorithms.shortest_paths.generic import shortest_path
 from networkx.algorithms.approximation.connectivity import all_pairs_node_connectivity
-from networkx.algorithms.clique import node_clique_number
-from networkx.algorithms.centrality import betweenness_centrality, edge_betweenness_centrality
+from networkx.algorithms.link_prediction import resource_allocation_index, jaccard_coefficient, adamic_adar_index
+from networkx.algorithms.communicability_alg import communicability
 from torch_geometric.utils.convert import to_networkx
 from torch_geometric.data import Data
 from torch_geometric.utils import to_dense_adj, dense_to_sparse
@@ -208,6 +208,27 @@ def hierarchical_shortest_distance(node_size, dense_orig_adj, new_edge_index, hi
     return hier_sd, hier_label
 
 
+# -
+
+def compute_all_attributes(d_nx, edge_index):
+    attr_funcs = [communicability, resource_allocation_index, jaccard_coefficient, adamic_adar_index]
+    attr_names = ['communicability', 'resource_allocation_index', 'jaccard_coefficient', 'adamic_adar_index']
+    attrs = zip(attr_funcs, attr_names)
+    
+    edge_attrs = {}
+    for func, name in attrs:
+        edge_attr = []
+        p = func(d_nx)
+        for s, t in edge_index.t().tolist():
+            if s in p and t in p[s]:
+                edge_attr += [p[s][t]]
+            else:
+                edge_attr += [0]
+        edge_attrs[name] = (torch.LongTensor(edge_attr))
+
+    return edge_attrs
+
+
 # +
 def pre_process(d, args):
     node_size = d.x.size(0)
@@ -233,10 +254,14 @@ def pre_process(d, args):
     sd_edge_attr = shortest_distances(d_nx, new_edge_index).view(-1, 1)
     cn_edge_attr = node_connectivity(d_nx, new_edge_index).view(-1, 1)
     hsd_edge_attr, hier_label = hierarchical_shortest_distance(node_size, dense_orig_adj, new_edge_index, args.hier_levels)
+    other_edge_attrs = compute_all_attributes(d_nx, new_edge_index)
     
     return Data(x=d.x, y=d.y, edge_index=new_edge_index, orig_edge_index=d.edge_index, edge_attr=new_edge_attr, \
-         orig_edge_attr=d.edge_attr, sd_edge_attr=sd_edge_attr, cn_edge_attr=cn_edge_attr, hsd_edge_attr=hsd_edge_attr, hier_label=hier_label)
-
+         orig_edge_attr=d.edge_attr, sd_edge_attr=sd_edge_attr, cn_edge_attr=cn_edge_attr, hsd_edge_attr=hsd_edge_attr, hier_label=hier_label, \
+                comm_edge_attr=other_edge_attrs['communicability'], \
+                alloc_edge_attr=other_edge_attrs['resource_allocation_index'], \
+                jaccard_edge_attr=other_edge_attrs['jaccard_coefficient'], \
+                adamic_edge_attr=other_edge_attrs['adamic_adar_index'])
 
 def pre_process_with_summary(d, args):
     node_size = d.x.size(0)
@@ -262,6 +287,7 @@ def pre_process_with_summary(d, args):
     sd_edge_attr = shortest_distances(d_nx, new_edge_index)
     cn_edge_attr = node_connectivity(d_nx, new_edge_index)
     hsd_edge_attr, hier_label = hierarchical_shortest_distance(node_size, dense_orig_adj, new_edge_index, args.hier_levels)
+    other_edge_attrs = compute_all_attributes(d_nx, new_edge_index)
     
     # add summary node that connects to all the other nodes.
     # append row of -1's as raw features of summary node (modified AtomEncoder will specially handle all -1's)
@@ -279,9 +305,15 @@ def pre_process_with_summary(d, args):
     new_edge_attr = torch.cat([new_edge_attr, -torch.ones(node_size*2, new_edge_attr.size(1)).long()])
     sd_edge_attr = torch.cat([sd_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
     cn_edge_attr = torch.cat([cn_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
+    for attr_name in other_edge_attrs:
+        other_edge_attrs[attr_name] = torch.cat([other_edge_attrs[attr_name], -torch.ones(node_size*2).long()]).view(-1, 1)
     
     return Data(x=d.x, y=d.y, edge_index=new_edge_index, orig_edge_index=d.edge_index, edge_attr=new_edge_attr, \
-         orig_edge_attr=d.edge_attr, sd_edge_attr=sd_edge_attr, cn_edge_attr=cn_edge_attr, hsd_edge_attr=hsd_edge_attr, hier_label=hier_label)
+         orig_edge_attr=d.edge_attr, sd_edge_attr=sd_edge_attr, cn_edge_attr=cn_edge_attr, hsd_edge_attr=hsd_edge_attr, hier_label=hier_label, \
+                comm_edge_attr=other_edge_attrs['communicability'], \
+                alloc_edge_attr=other_edge_attrs['resource_allocation_index'], \
+                jaccard_edge_attr=other_edge_attrs['jaccard_coefficient'], \
+                adamic_edge_attr=other_edge_attrs['adamic_adar_index'])
 
 # +
 
