@@ -255,6 +255,8 @@ def pre_process(d, args):
     cn_edge_attr = node_connectivity(d_nx, new_edge_index).view(-1, 1)
     hsd_edge_attr, hier_label = hierarchical_shortest_distance(node_size, dense_orig_adj, new_edge_index, args.hier_levels)
     other_edge_attrs = compute_all_attributes(d_nx, new_edge_index)
+    for attr_name in other_edge_attrs:
+        other_edge_attrs[attr_name] = other_edge_attrs[attr_name].view(-1, 1)
     
     return Data(x=d.x, y=d.y, edge_index=new_edge_index, orig_edge_index=d.edge_index, edge_attr=new_edge_attr, \
          orig_edge_attr=d.edge_attr, sd_edge_attr=sd_edge_attr, cn_edge_attr=cn_edge_attr, hsd_edge_attr=hsd_edge_attr, hier_label=hier_label, \
