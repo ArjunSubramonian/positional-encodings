@@ -15,6 +15,9 @@ import torch.nn.functional as F
 from sklearn.cluster import spectral_clustering
 from scipy.sparse import csgraph
 
+from scipy.linalg import eigh
+from networkx.linalg.laplacianmatrix import normalized_laplacian_matrix
+
 
 # -
 
@@ -224,9 +227,26 @@ def compute_all_attributes(d_nx, edge_index):
                 edge_attr += [p[s][t]]
             else:
                 edge_attr += [0]
-        edge_attrs[name] = (torch.LongTensor(edge_attr))
+        edge_attrs[name] = torch.LongTensor(edge_attr)
 
     return edge_attrs
+
+
+def laplacian_pos_encodings(d_nx, k):
+    sp_lap = normalized_laplacian_matrix(d_nx)
+    N = d_nx.number_of_nodes()
+#     if N <= k + 2:
+#         _, eigvecs = eigs(sp_lap, k=N-2, which='SM') # all smallest eigenvectors
+#         return torch.cat([torch.Tensor(eigvecs[:, 1:]), torch.zeros(N, k - N + 3)], dim=1) # remove nontrivial eigenvector and pad
+#     else:
+#         _, eigvecs = eigs(sp_lap, k=k+1, which='SM') # k + 1 smallest eigenvectors
+#         return torch.Tensor(eigvecs[:, 1:]) # remove nontrivial eigenvector
+
+    _, eigvecs = eigh(sp_lap.toarray()) # all eigenvectors
+    if k + 1 > N:
+        return torch.cat([torch.Tensor(eigvecs[:, 1:]), torch.zeros(N, k - N + 1)], dim=1) # remove nontrivial eigenvector and pad
+    else:
+        return torch.Tensor(eigvecs[:, 1:k+1]) # remove nontrivial eigenvector
 
 
 # +
@@ -235,6 +255,7 @@ def pre_process(d, args):
     
     #     Construct networkX type of original graph for different metrics
     d_nx = to_networkx(d, to_undirected=True)
+    d_nx_without_self_loops = to_networkx(d, to_undirected=True, remove_self_loops=True)
     
     #     Augment the graph to be K-hop graph
     dense_orig_adj = to_dense_adj(d.edge_index, max_num_nodes=node_size).squeeze(dim=0).long()
@@ -257,8 +278,10 @@ def pre_process(d, args):
     other_edge_attrs = compute_all_attributes(d_nx, new_edge_index)
     for attr_name in other_edge_attrs:
         other_edge_attrs[attr_name] = other_edge_attrs[attr_name].view(-1, 1)
+    laplacian_pos = laplacian_pos_encodings(d_nx_without_self_loops, args.lap_k)
+    assert laplacian_pos.size(0) == d_nx.number_of_nodes() and laplacian_pos.size(1) == args.lap_k
     
-    return Data(x=d.x, y=d.y, edge_index=new_edge_index, orig_edge_index=d.edge_index, edge_attr=new_edge_attr, \
+    return Data(x=d.x, lap_x=laplacian_pos, y=d.y, edge_index=new_edge_index, orig_edge_index=d.edge_index, edge_attr=new_edge_attr, \
          orig_edge_attr=d.edge_attr, sd_edge_attr=sd_edge_attr, cn_edge_attr=cn_edge_attr, hsd_edge_attr=hsd_edge_attr, hier_label=hier_label, \
                 comm_edge_attr=other_edge_attrs['communicability'], \
                 alloc_edge_attr=other_edge_attrs['resource_allocation_index'], \
@@ -270,6 +293,7 @@ def pre_process_with_summary(d, args):
     
     #     Construct networkX type of original graph for different metrics
     d_nx = to_networkx(d, to_undirected=True)
+    d_nx_without_self_loops = to_networkx(d, to_undirected=True, remove_self_loops=True)
     
     #     Augment the graph to be K-hop graph
     dense_orig_adj = to_dense_adj(d.edge_index, max_num_nodes=node_size).squeeze(dim=0).long()
@@ -290,10 +314,13 @@ def pre_process_with_summary(d, args):
     cn_edge_attr = node_connectivity(d_nx, new_edge_index)
     hsd_edge_attr, hier_label = hierarchical_shortest_distance(node_size, dense_orig_adj, new_edge_index, args.hier_levels)
     other_edge_attrs = compute_all_attributes(d_nx, new_edge_index)
+    laplacian_pos = laplacian_pos_encodings(d_nx_without_self_loops, args.lap_k)
+    assert laplacian_pos.size(0) == d_nx.number_of_nodes() and laplacian_pos.size(1) == args.lap_k
     
     # add summary node that connects to all the other nodes.
     # append row of -1's as raw features of summary node (modified AtomEncoder will specially handle all -1's)
     d.x = torch.cat([d.x, -torch.ones(1, d.x.size(1)).long()])
+    laplacian_pos = torch.cat([laplacian_pos, torch.zeros(1, laplacian_pos.size(1)).long()])
     # okay to add self-loop to summary node
     # don't need to coalesce
     # append columns to edge_index to connect summary node to all other nodes
@@ -310,7 +337,7 @@ def pre_process_with_summary(d, args):
     for attr_name in other_edge_attrs:
         other_edge_attrs[attr_name] = torch.cat([other_edge_attrs[attr_name], -torch.ones(node_size*2).long()]).view(-1, 1)
     
-    return Data(x=d.x, y=d.y, edge_index=new_edge_index, orig_edge_index=d.edge_index, edge_attr=new_edge_attr, \
+    return Data(x=d.x, lap_x=laplacian_pos, y=d.y, edge_index=new_edge_index, orig_edge_index=d.edge_index, edge_attr=new_edge_attr, \
          orig_edge_attr=d.edge_attr, sd_edge_attr=sd_edge_attr, cn_edge_attr=cn_edge_attr, hsd_edge_attr=hsd_edge_attr, hier_label=hier_label, \
                 comm_edge_attr=other_edge_attrs['communicability'], \
                 alloc_edge_attr=other_edge_attrs['resource_allocation_index'], \

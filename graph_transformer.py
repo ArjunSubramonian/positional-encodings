@@ -316,7 +316,7 @@ class MultiDimRelEncoding(nn.Module):
 
     
 class GT(nn.Module):
-    def __init__(self, n_hid, n_out, n_heads, n_layers, edge_dim_dict, dropout = 0.2, summary_node = True):
+    def __init__(self, n_hid, n_out, n_heads, n_layers, edge_dim_dict, dropout = 0.2, summary_node = True, lap_k=None):
         super(GT, self).__init__()
         self.node_encoder = ModifiedAtomEncoder(emb_dim=n_hid, summary_node=summary_node)
         self.n_hid     = n_hid
@@ -326,10 +326,15 @@ class GT(nn.Module):
                                       for _ in range(n_layers)])
         self.out       = nn.Linear(n_hid, n_out)
         self.summary_node = summary_node
+        
+        if lap_k is not None:
+            self.lap_linear = nn.Linear(lap_k, n_hid, bias=False)
 
     def forward(self, node_attr, batch_idx, edge_index, strats):
-        # strats: edge_attr, cn_edge_attr, sd_edge_attr, etc.
+        # strats: edge_attr, cn_edge_attr, sd_edge_attr, lap_x, etc.
         node_rep = self.node_encoder(node_attr)
+        if 'lap_x' in strats:
+            node_rep += self.lap_linear(strats['lap_x'])
         for gc in self.gcs:
             node_rep = gc(node_rep, edge_index, strats)
 
