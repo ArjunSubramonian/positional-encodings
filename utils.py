@@ -258,8 +258,8 @@ def pre_process(d, args):
     d_nx_without_self_loops = to_networkx(d, to_undirected=True, remove_self_loops=True)
     
     #     Augment the graph to be K-hop graph
-    dense_orig_adj = to_dense_adj(d.edge_index, max_num_nodes=node_size).squeeze(dim=0).long()
-    dense_orig_edge_attr = to_dense_adj(d.edge_index, edge_attr=d.edge_attr, max_num_nodes=node_size).squeeze(dim=0).long()
+    dense_orig_adj = to_dense_adj(d.edge_index, batch=d.edge_index.new_zeros(node_size), max_num_nodes=node_size).squeeze(dim=0).long()
+    dense_orig_edge_attr = to_dense_adj(d.edge_index, batch=d.edge_index.new_zeros(node_size), edge_attr=d.edge_attr, max_num_nodes=node_size).squeeze(dim=0).long()
     pow_dense_orig_adj = dense_orig_adj.clone()
     new_dense_orig_adj = dense_orig_adj.clone()
     for k in range(2, args.k_hop_neighbors + 1):
@@ -296,8 +296,8 @@ def pre_process_with_summary(d, args):
     d_nx_without_self_loops = to_networkx(d, to_undirected=True, remove_self_loops=True)
     
     #     Augment the graph to be K-hop graph
-    dense_orig_adj = to_dense_adj(d.edge_index, max_num_nodes=node_size).squeeze(dim=0).long()
-    dense_orig_edge_attr = to_dense_adj(d.edge_index, edge_attr=d.edge_attr, max_num_nodes=node_size).squeeze(dim=0).long()
+    dense_orig_adj = to_dense_adj(d.edge_index, batch=d.edge_index.new_zeros(node_size), max_num_nodes=node_size).squeeze(dim=0).long()
+    dense_orig_edge_attr = to_dense_adj(d.edge_index, batch=d.edge_index.new_zeros(node_size), edge_attr=d.edge_attr, max_num_nodes=node_size).squeeze(dim=0).long()
     pow_dense_orig_adj = dense_orig_adj.clone()
     new_dense_orig_adj = dense_orig_adj.clone()
     for k in range(2, args.k_hop_neighbors + 1):
