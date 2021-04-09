@@ -59,6 +59,7 @@ class GT(nn.Module):
         node_rep = self.node_encoder(node_attr)
         if 'lap_x' in strats:
             node_rep += self.lap_linear(strats['lap_x'])
+        del strats['lap_x']
             
         for key in strats:
             # TODO (low priority): learn different embeddings for different values of k hops

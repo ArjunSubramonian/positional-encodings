@@ -207,11 +207,12 @@ def compute_adamic_adar_index(d_nx, edge_index):
 # -
 
 def positionalencoding1d(edge_attr, d_model):
-    pe = torch.zeros(edge_attr.size(0), d_model)
-    div_term = torch.exp((torch.arange(0, d_model, 2, dtype=torch.float) *
-                         -(math.log(10000.0) / d_model)))
-    pe[:, 0::2] = torch.sin(edge_attr * div_term)
-    pe[:, 1::2] = torch.cos(edge_attr * div_term)
+    with torch.no_grad():
+        pe = torch.zeros(edge_attr.size(0), d_model)
+        div_term = torch.exp((torch.arange(0, d_model, 2, dtype=torch.float) *
+                             -(math.log(10000.0) / d_model)))
+        pe[:, 0::2] = torch.sin(edge_attr * div_term)
+        pe[:, 1::2] = torch.cos(edge_attr * div_term)
 
     return pe
 
