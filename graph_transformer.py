@@ -59,7 +59,7 @@ class GT(nn.Module):
         node_rep = self.node_encoder(node_attr)
         if 'lap_x' in strats:
             node_rep += self.lap_linear(strats['lap_x'])
-        del strats['lap_x']
+            del strats['lap_x']
             
         for key in strats:
             # TODO (low priority): learn different embeddings for different values of k hops
@@ -95,7 +95,8 @@ class GT(nn.Module):
         
 
 class GT_Layer(MessagePassing):
-    def __init__(self, n_hid, n_heads, edge_dim_dict, dropout = 0.2, summary_node = True, **kwargs):
+    def __init__(self, n_hid, n_heads, edge_dim_dict, dropout = 0.2, summary_node = True, \
+                 node_norm=False, drop_within_softmax=False, **kwargs):
         super(GT_Layer, self).__init__(node_dim=0, aggr='add', **kwargs)
 
         self.n_hid         = n_hid
@@ -123,8 +124,16 @@ class GT_Layer(MessagePassing):
         # self.mid_linear  = nn.Linear(n_hid,  n_hid * 2)
         # self.out_linear  = nn.Linear(n_hid * 2,  n_hid)
         self.out_linear = nn.Linear(n_hid,  n_hid)
-        self.out_norm    = nn.LayerNorm(n_hid)
+        
+        self.node_norm = node_norm
+        if node_norm:
+            self.tgt_norm   = nn.LayerNorm(n_hid, elementwise_affine=False)
+            self.src_norm   = nn.LayerNorm(n_hid, elementwise_affine=False)
+        else:
+            self.out_norm    = nn.LayerNorm(n_hid)
+        
         self.summary_node = summary_node
+        self.drop_within_softmax = drop_within_softmax
         
     def forward(self, node_inp, edge_index, strats):
         return self.propagate(edge_index, node_inp=node_inp, strats=strats)
@@ -137,10 +146,15 @@ class GT_Layer(MessagePassing):
         '''
             Create Attention and Message tensor beforehand.
         '''
-        target_node_vec = node_inp_i
+        if self.node_norm:
+            target_node_vec = self.tgt_norm(node_inp_i)
+        else:
+            target_node_vec = node_inp_i
         source_node_vec = node_inp_j 
         for key in strats:
             source_node_vec += self.struc_enc[key](strats[key])
+        if self.node_norm:
+            source_node_vec = self.src_norm(source_node_vec)
                 
         q_mat = self.q_linear(target_node_vec).view(-1, self.n_heads, self.d_k)
         k_mat = self.k_linear(source_node_vec).view(-1, self.n_heads, self.d_k)
@@ -149,7 +163,11 @@ class GT_Layer(MessagePassing):
         '''
             Softmax based on target node's id (edge_index_i). Store attention value in self.att for later visualization.
         '''
-        self.att = self.drop(softmax((q_mat * k_mat).sum(dim=-1) / self.sqrt_dk, edge_index_i))
+        if self.drop_within_softmax:
+            self.att = softmax(self.drop((q_mat * k_mat).sum(dim=-1) / self.sqrt_dk), edge_index_i)
+        else:
+            self.att = self.drop(softmax((q_mat * k_mat).sum(dim=-1) / self.sqrt_dk, edge_index_i))
+        
         res = v_mat * self.att.view(-1, self.n_heads, 1)
         return res.view(-1, self.n_hid)
 
@@ -157,7 +175,9 @@ class GT_Layer(MessagePassing):
     def update(self, aggr_out, node_inp):
         trans_out = self.norm(self.drop(self.a_linear(F.gelu(aggr_out))) + node_inp)
         # trans_out = self.out_norm(self.drop(self.out_linear(F.gelu(self.mid_linear(trans_out)))) + trans_out)
-        trans_out = self.out_norm(self.drop(self.out_linear(trans_out)) + trans_out)
+        trans_out = self.drop(self.out_linear(F.gelu(trans_out))) + trans_out
+        if self.node_norm:
+            trans_out = self.out_norm(trans_out)
         return trans_out
 # +
 from ogb.utils.features import get_atom_feature_dims, get_bond_feature_dims 
