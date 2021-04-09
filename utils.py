@@ -21,73 +21,6 @@ from networkx.linalg.laplacianmatrix import normalized_laplacian_matrix
 
 # -
 
-def compute_mutual_shortest_distances(d):
-    d_nx = to_networkx(d, to_undirected=True)
-    p = shortest_path(d_nx)
-    
-    sd_edge_index = torch.LongTensor(2, d.x.size(0) * d.x.size(0))
-    sd_edge_attr = torch.FloatTensor(d.x.size(0) * d.x.size(0), 1)
-    for i in range(d.x.size(0)):
-        for j in range(d.x.size(0)):
-            sd_edge_index[0][i * d.x.size(0) + j] = i
-            sd_edge_index[1][i * d.x.size(0) + j] = j
-            
-            if j in p[i]:
-                sd_edge_attr[i * d.x.size(0) + j] = len(p[i][j]) - 1
-            else:
-                sd_edge_attr[i * d.x.size(0) + j] = float("inf")
-        
-    return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, sd_edge_index=sd_edge_index, sd_edge_attr=sd_edge_attr)
-
-
-def compute_all_node_connectivity(d):
-    d_nx = to_networkx(d, to_undirected=True)
-    k = all_pairs_node_connectivity(d_nx)
-
-    connect_edge_index = torch.LongTensor(2, d.x.size(0) * d.x.size(0))
-    connect_edge_attr = torch.FloatTensor(d.x.size(0) * d.x.size(0), 1)
-    for i in range(d.x.size(0)):
-        for j in range(d.x.size(0)):
-            connect_edge_index[0][i * d.x.size(0) + j] = i
-            connect_edge_index[1][i * d.x.size(0) + j] = j
-
-            connect_edge_attr[i * d.x.size(0) + j] = k[i][j]
-
-    return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, connect_edge_index=connect_edge_index,
-                connect_edge_attr=connect_edge_attr)
-
-# This is node level & edge level betweenness centrality
-
-def compute_edge_betweenness_centrality(d):
-    d_nx = to_networkx(d, to_undirected=True)
-    edge_dict = edge_betweenness_centrality(d_nx, k=5)
-
-    bt_edge_attr = torch.FloatTensor(d.x.size(0) * d.x.size(0), 1)
-    for i in range(d.edge_index.size(1)):
-        bt_edge_attr[i] = edge_dict[i]
-
-    return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, bt_edge_index=d.edge_index,
-                bt_edge_attr=bt_edge_attr)
-
-
-def compute_clique_number(d):
-    d_nx = to_networkx(d, to_undirected=True)
-    k = node_clique_number(d_nx)
-
-    cliq_edge_index = torch.LongTensor(2, d.x.size(0) * d.x.size(0))
-    cliq_edge_attr = torch.FloatTensor(d.x.size(0) * d.x.size(0), 1)
-    for i in range(d.x.size(0)):
-        for j in range(d.x.size(0)):
-            cliq_edge_index[0][i * d.x.size(0) + j] = i
-            cliq_edge_index[1][i * d.x.size(0) + j] = j
-
-            cliq_edge_attr[i * d.x.size(0) + j] = k[i][j]
-
-    return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, cliq_edge_index=cliq_edge_index,
-                cliq_edge_attr=cliq_edge_attr)
-
-
-
 def get_optimizer(model: nn.Module, learning_rate: float = 1e-4, adam_eps: float = 1e-6,
                   weight_decay: float = 0.0) -> torch.optim.Optimizer:
     no_decay = ['bias', 'LayerNorm.weight']
@@ -211,36 +144,81 @@ def hierarchical_shortest_distance(node_size, dense_orig_adj, new_edge_index, hi
     return hier_sd, hier_label
 
 
+# +
+def compute_communicability(d_nx, edge_index):
+    edge_attr = []
+    p = communicability(d_nx)
+    for s, t in edge_index.t().tolist():
+        if s in p and t in p[s]:
+            edge_attr += [p[s][t]]
+        else:
+            edge_attr += [0]
+    return torch.FloatTensor(edge_attr)
+
+def compute_resource_allocation_index(d_nx, edge_index):
+    edge_attr = []
+    r = resource_allocation_index(d_nx)
+    p = {}
+    for u, v, q in r:
+        if u not in p:
+            p[u] = {}
+        p[u][v] = q
+    
+    for s, t in edge_index.t().tolist():
+        if s in p and t in p[s]:
+            edge_attr += [p[s][t]]
+        else:
+            edge_attr += [0]
+    return torch.FloatTensor(edge_attr)
+
+def compute_jaccard_coefficient(d_nx, edge_index):
+    edge_attr = []
+    r = jaccard_coefficient(d_nx)
+    p = {}
+    for u, v, q in r:
+        if u not in p:
+            p[u] = {}
+        p[u][v] = q
+    
+    for s, t in edge_index.t().tolist():
+        if s in p and t in p[s]:
+            edge_attr += [p[s][t]]
+        else:
+            edge_attr += [0]
+    return torch.FloatTensor(edge_attr)
+
+def compute_adamic_adar_index(d_nx, edge_index):
+    edge_attr = []
+    r = adamic_adar_index(d_nx)
+    p = {}
+    for u, v, q in r:
+        if u not in p:
+            p[u] = {}
+        p[u][v] = q
+    
+    for s, t in edge_index.t().tolist():
+        if s in p and t in p[s]:
+            edge_attr += [p[s][t]]
+        else:
+            edge_attr += [0]
+    return torch.FloatTensor(edge_attr)
+
+
 # -
 
-def compute_all_attributes(d_nx, edge_index):
-    attr_funcs = [communicability, resource_allocation_index, jaccard_coefficient, adamic_adar_index]
-    attr_names = ['communicability', 'resource_allocation_index', 'jaccard_coefficient', 'adamic_adar_index']
-    attrs = zip(attr_funcs, attr_names)
-    
-    edge_attrs = {}
-    for func, name in attrs:
-        edge_attr = []
-        p = func(d_nx)
-        for s, t in edge_index.t().tolist():
-            if s in p and t in p[s]:
-                edge_attr += [p[s][t]]
-            else:
-                edge_attr += [0]
-        edge_attrs[name] = torch.LongTensor(edge_attr)
+def positionalencoding1d(edge_attr, d_model):
+    pe = torch.zeros(edge_attr.size(0), d_model)
+    div_term = torch.exp((torch.arange(0, d_model, 2, dtype=torch.float) *
+                         -(math.log(10000.0) / d_model)))
+    pe[:, 0::2] = torch.sin(edge_attr * div_term)
+    pe[:, 1::2] = torch.cos(edge_attr * div_term)
 
-    return edge_attrs
+    return pe
 
 
 def laplacian_pos_encodings(d_nx, k):
     sp_lap = normalized_laplacian_matrix(d_nx)
     N = d_nx.number_of_nodes()
-#     if N <= k + 2:
-#         _, eigvecs = eigs(sp_lap, k=N-2, which='SM') # all smallest eigenvectors
-#         return torch.cat([torch.Tensor(eigvecs[:, 1:]), torch.zeros(N, k - N + 3)], dim=1) # remove nontrivial eigenvector and pad
-#     else:
-#         _, eigvecs = eigs(sp_lap, k=k+1, which='SM') # k + 1 smallest eigenvectors
-#         return torch.Tensor(eigvecs[:, 1:]) # remove nontrivial eigenvector
 
     _, eigvecs = eigh(sp_lap.toarray()) # all eigenvectors
     if k + 1 > N:
@@ -275,18 +253,20 @@ def pre_process(d, args):
     sd_edge_attr = shortest_distances(d_nx, new_edge_index).view(-1, 1)
     cn_edge_attr = node_connectivity(d_nx, new_edge_index).view(-1, 1)
     hsd_edge_attr, hier_label = hierarchical_shortest_distance(node_size, dense_orig_adj, new_edge_index, args.hier_levels)
-    other_edge_attrs = compute_all_attributes(d_nx, new_edge_index)
-    for attr_name in other_edge_attrs:
-        other_edge_attrs[attr_name] = other_edge_attrs[attr_name].view(-1, 1)
+    comm_edge_attr = compute_communicability(d_nx, new_edge_index).view(-1, 1)
+    alloc_edge_attr = compute_resource_allocation_index(d_nx, new_edge_index).view(-1, 1)
+    jaccard_edge_attr = compute_jaccard_coefficient(d_nx, new_edge_index).view(-1, 1)
+    adamic_edge_attr = compute_adamic_adar_index(d_nx, new_edge_index).view(-1, 1)
+    
     laplacian_pos = laplacian_pos_encodings(d_nx_without_self_loops, args.lap_k)
     assert laplacian_pos.size(0) == d_nx.number_of_nodes() and laplacian_pos.size(1) == args.lap_k
     
     return Data(x=d.x, lap_x=laplacian_pos, y=d.y, edge_index=new_edge_index, orig_edge_index=d.edge_index, edge_attr=new_edge_attr, \
          orig_edge_attr=d.edge_attr, sd_edge_attr=sd_edge_attr, cn_edge_attr=cn_edge_attr, hsd_edge_attr=hsd_edge_attr, hier_label=hier_label, \
-                comm_edge_attr=other_edge_attrs['communicability'], \
-                alloc_edge_attr=other_edge_attrs['resource_allocation_index'], \
-                jaccard_edge_attr=other_edge_attrs['jaccard_coefficient'], \
-                adamic_edge_attr=other_edge_attrs['adamic_adar_index'])
+                comm_edge_attr=comm_edge_attr, \
+                alloc_edge_attr=alloc_edge_attr, \
+                jaccard_edge_attr=jaccard_edge_attr, \
+                adamic_edge_attr=adamic_edge_attr)
 
 def pre_process_with_summary(d, args):
     node_size = d.x.size(0)
@@ -313,7 +293,11 @@ def pre_process_with_summary(d, args):
     sd_edge_attr = shortest_distances(d_nx, new_edge_index)
     cn_edge_attr = node_connectivity(d_nx, new_edge_index)
     hsd_edge_attr, hier_label = hierarchical_shortest_distance(node_size, dense_orig_adj, new_edge_index, args.hier_levels)
-    other_edge_attrs = compute_all_attributes(d_nx, new_edge_index)
+    comm_edge_attr = compute_communicability(d_nx, new_edge_index)
+    alloc_edge_attr = compute_resource_allocation_index(d_nx, new_edge_index)
+    jaccard_edge_attr = compute_jaccard_coefficient(d_nx, new_edge_index)
+    adamic_edge_attr = compute_adamic_adar_index(d_nx, new_edge_index)
+    
     laplacian_pos = laplacian_pos_encodings(d_nx_without_self_loops, args.lap_k)
     assert laplacian_pos.size(0) == d_nx.number_of_nodes() and laplacian_pos.size(1) == args.lap_k
     
@@ -334,15 +318,48 @@ def pre_process_with_summary(d, args):
     new_edge_attr = torch.cat([new_edge_attr, -torch.ones(node_size*2, new_edge_attr.size(1)).long()])
     sd_edge_attr = torch.cat([sd_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
     cn_edge_attr = torch.cat([cn_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
-    for attr_name in other_edge_attrs:
-        other_edge_attrs[attr_name] = torch.cat([other_edge_attrs[attr_name], -torch.ones(node_size*2).long()]).view(-1, 1)
+    # hsd_edge_attr = torch.cat([hsd_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
+    comm_edge_attr = torch.cat([comm_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
+    alloc_edge_attr = torch.cat([alloc_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
+    jaccard_edge_attr = torch.cat([jaccard_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
+    adamic_edge_attr = torch.cat([adamic_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
     
     return Data(x=d.x, lap_x=laplacian_pos, y=d.y, edge_index=new_edge_index, orig_edge_index=d.edge_index, edge_attr=new_edge_attr, \
          orig_edge_attr=d.edge_attr, sd_edge_attr=sd_edge_attr, cn_edge_attr=cn_edge_attr, hsd_edge_attr=hsd_edge_attr, hier_label=hier_label, \
-                comm_edge_attr=other_edge_attrs['communicability'], \
-                alloc_edge_attr=other_edge_attrs['resource_allocation_index'], \
-                jaccard_edge_attr=other_edge_attrs['jaccard_coefficient'], \
-                adamic_edge_attr=other_edge_attrs['adamic_adar_index'])
+                comm_edge_attr=comm_edge_attr, \
+                alloc_edge_attr=alloc_edge_attr, \
+                jaccard_edge_attr=jaccard_edge_attr, \
+                adamic_edge_attr=adamic_edge_attr)
+
+
+# +
+from ogb.graphproppred import PygGraphPropPredDataset
+import argparse
+
+dataset = PygGraphPropPredDataset(name='ogbg-molbace')
+d = dataset[0]
+parser = argparse.ArgumentParser(description='PyTorch implementation of relative positional encodings and relation-aware self-attention for graph Transformers')
+args = parser.parse_args("")
+args.k_hop_neighbors = 3
+args.hier_levels = 3
+args.lap_k = 10
+
+d_new = pre_process(d, args)
+# -
+
+print(d_new)
+
+print(d.edge_attr.size())
+print(d_new.edge_attr.size())
+
+print(d_new.alloc_edge_attr)
+
+d_new = pre_process_with_summary(d, args)
+print(d.edge_attr.size())
+print(d_new.edge_attr.size())
+print(d_new.adamic_edge_attr)
+
+# ## Old Code
 
 # +
 
@@ -392,3 +409,79 @@ def pre_process_with_summary(d, args):
     
 #     return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, \
 #          sd_edge_attr=sd_edge_attr, cn_edge_attr=cn_edge_attr)
+
+# +
+# def compute_clique_number(d):
+#     d_nx = to_networkx(d, to_undirected=True)
+#     k = node_clique_number(d_nx)
+
+#     cliq_edge_index = torch.LongTensor(2, d.x.size(0) * d.x.size(0))
+#     cliq_edge_attr = torch.FloatTensor(d.x.size(0) * d.x.size(0), 1)
+#     for i in range(d.x.size(0)):
+#         for j in range(d.x.size(0)):
+#             cliq_edge_index[0][i * d.x.size(0) + j] = i
+#             cliq_edge_index[1][i * d.x.size(0) + j] = j
+
+#             cliq_edge_attr[i * d.x.size(0) + j] = k[i][j]
+
+#     return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, cliq_edge_index=cliq_edge_index,
+#                 cliq_edge_attr=cliq_edge_attr)
+
+# +
+# def compute_edge_betweenness_centrality(d):
+#     d_nx = to_networkx(d, to_undirected=True)
+#     edge_dict = edge_betweenness_centrality(d_nx, k=5)
+
+#     bt_edge_attr = torch.FloatTensor(d.x.size(0) * d.x.size(0), 1)
+#     for i in range(d.edge_index.size(1)):
+#         bt_edge_attr[i] = edge_dict[i]
+
+#     return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, bt_edge_index=d.edge_index,
+#                 bt_edge_attr=bt_edge_attr)
+
+# +
+# def compute_all_node_connectivity(d):
+#     d_nx = to_networkx(d, to_undirected=True)
+#     k = all_pairs_node_connectivity(d_nx)
+
+#     connect_edge_index = torch.LongTensor(2, d.x.size(0) * d.x.size(0))
+#     connect_edge_attr = torch.FloatTensor(d.x.size(0) * d.x.size(0), 1)
+#     for i in range(d.x.size(0)):
+#         for j in range(d.x.size(0)):
+#             connect_edge_index[0][i * d.x.size(0) + j] = i
+#             connect_edge_index[1][i * d.x.size(0) + j] = j
+
+#             connect_edge_attr[i * d.x.size(0) + j] = k[i][j]
+
+#     return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, connect_edge_index=connect_edge_index,
+#                 connect_edge_attr=connect_edge_attr)
+
+# +
+# def compute_mutual_shortest_distances(d):
+#     d_nx = to_networkx(d, to_undirected=True)
+#     p = shortest_path(d_nx)
+    
+#     sd_edge_index = torch.LongTensor(2, d.x.size(0) * d.x.size(0))
+#     sd_edge_attr = torch.FloatTensor(d.x.size(0) * d.x.size(0), 1)
+#     for i in range(d.x.size(0)):
+#         for j in range(d.x.size(0)):
+#             sd_edge_index[0][i * d.x.size(0) + j] = i
+#             sd_edge_index[1][i * d.x.size(0) + j] = j
+            
+#             if j in p[i]:
+#                 sd_edge_attr[i * d.x.size(0) + j] = len(p[i][j]) - 1
+#             else:
+#                 sd_edge_attr[i * d.x.size(0) + j] = float("inf")
+        
+#     return Data(x=d.x, y=d.y, edge_index=d.edge_index, edge_attr=d.edge_attr, sd_edge_index=sd_edge_index, sd_edge_attr=sd_edge_attr)
+
+# +
+# def laplacian_pos_encodings(d_nx, k):
+#     sp_lap = normalized_laplacian_matrix(d_nx)
+#     N = d_nx.number_of_nodes()
+#     if N <= k + 2:
+#         _, eigvecs = eigs(sp_lap, k=N-2, which='SM') # all smallest eigenvectors
+#         return torch.cat([torch.Tensor(eigvecs[:, 1:]), torch.zeros(N, k - N + 3)], dim=1) # remove nontrivial eigenvector and pad
+#     else:
+#         _, eigvecs = eigs(sp_lap, k=k+1, which='SM') # k + 1 smallest eigenvectors
+#         return torch.Tensor(eigvecs[:, 1:]) # remove nontrivial eigenvector
