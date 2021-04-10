@@ -26,14 +26,14 @@ class MultiDimRelEncoding(nn.Module):
     def forward(self, t):
         out = 0
         for i in range(self.n_dim):
-            out += self.embs[i](t[:, i])
-        return self.drop(out)
+            out += self.drop(self.embs[i](t[:, i]))
+        return out
 
     
 class GT(nn.Module):
     def __init__(self, n_hid, n_out, n_heads, n_layers, edge_dim_dict, dropout = 0.2, summary_node = True, lap_k=None):
         super(GT, self).__init__()
-        self.node_encoder = ModifiedAtomEncoder(emb_dim=n_hid, summary_node=summary_node)
+        self.node_encoder = ModifiedAtomEncoder(emb_dim=n_hid, dropout=dropout, summary_node=summary_node)
         self.n_hid     = n_hid
         self.n_out     = n_out
         self.drop      = nn.Dropout(dropout)
@@ -65,7 +65,7 @@ class GT(nn.Module):
             # TODO (low priority): learn different embeddings for different values of k hops
             if self.summary_node:
                 if key == 'ea':
-                    strats[key] = self.struc_enc[key](strats[key])
+                    strats[key] = self.drop(self.struc_enc[key](strats[key]))
                 else:
                     attr = strats[key]
                     mask = attr.sum(-1) >= 0
@@ -78,12 +78,12 @@ class GT(nn.Module):
                     mod_attr_emb = torch.empty(attr.size(0), attr_emb.size(1), device=attr.device)
                     mod_attr_emb[mask] = attr_emb
                     mod_attr_emb[~mask] = 0
-                    strats[key] = mod_attr_emb
+                    strats[key] = self.drop(mod_attr_emb)
             else:
                 if key in ['co', 'al', 'ja', 'ad']:
-                    strats[key] = self.struc_enc[key](positionalencoding1d(strats[key], n_hid))
+                    strats[key] = self.drop(self.struc_enc[key](positionalencoding1d(strats[key], n_hid)))
                 else:
-                    strats[key] = self.struc_enc[key](strats[key])
+                    strats[key] = self.drop(self.struc_enc[key](strats[key]))
             
         for gc in self.gcs:
             node_rep = gc(node_rep, edge_index, strats)
@@ -187,7 +187,7 @@ full_bond_feature_dims = get_bond_feature_dims()
 
 class ModifiedAtomEncoder(torch.nn.Module):
 
-    def __init__(self, emb_dim, summary_node = True):
+    def __init__(self, emb_dim, dropout = 0.2, summary_node = True):
         super(ModifiedAtomEncoder, self).__init__()
         
         self.atom_embedding_list = torch.nn.ModuleList()
@@ -201,13 +201,15 @@ class ModifiedAtomEncoder(torch.nn.Module):
             self.summary_node_embedding = torch.nn.Parameter(torch.empty(1, emb_dim))
             torch.nn.init.xavier_uniform_(self.summary_node_embedding.data)
         self.summary_node = summary_node
+        
+        self.drop = torch.nn.Dropout(dropout)
 
     def forward(self, x):
         mask = x.sum(dim=1) >= 0  # mask of all non-summary nodes
         
         x_embedding = 0
         for i in range(x[mask].shape[1]):
-            x_embedding += self.atom_embedding_list[i](x[mask][:,i])
+            x_embedding += self.drop(self.atom_embedding_list[i](x[mask][:,i]))
         
 #         mod_x_embedding = torch.empty(x.size(0), x_embedding.size(1), device=x.get_device())
         mod_x_embedding = torch.empty(x.size(0), x_embedding.size(1), device=x.device)
@@ -246,7 +248,7 @@ class ModifiedBondEncoder(torch.nn.Module):
         
         bond_embedding = 0
         for i in range(edge_attr[mask].shape[1]):
-            bond_embedding += self.bond_embedding_list[i](edge_attr[mask][:,i])
+            bond_embedding += self.drop(self.bond_embedding_list[i](edge_attr[mask][:,i]))
         
 #         mod_bond_embedding = torch.empty(edge_attr.size(0), bond_embedding.size(1), device=edge_attr.get_device())
         mod_bond_embedding = torch.empty(edge_attr.size(0), bond_embedding.size(1), device=edge_attr.device)
@@ -258,7 +260,7 @@ class ModifiedBondEncoder(torch.nn.Module):
         else:
             mod_bond_embedding[~mask] = 0
             
-        return self.drop(mod_bond_embedding)
+        return mod_bond_embedding
 # -
 
 # ## Old Code
