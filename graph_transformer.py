@@ -26,8 +26,8 @@ class MultiDimRelEncoding(nn.Module):
     def forward(self, t):
         out = 0
         for i in range(self.n_dim):
-            out += self.drop(self.embs[i](t[:, i]))
-        return out
+            out += self.embs[i](t[:, i])
+        return self.drop(out)
 
     
 class GT(nn.Module):
@@ -56,7 +56,7 @@ class GT(nn.Module):
 
     def forward(self, node_attr, batch_idx, edge_index, strats):
         # strats: edge_attr, cn_edge_attr, sd_edge_attr, lap_x, etc.
-        node_rep = self.node_encoder(node_attr)
+        node_rep = self.drop(self.node_encoder(node_attr))
         if 'lap_x' in strats:
             node_rep += self.lap_linear(strats['lap_x'])
             del strats['lap_x']
@@ -176,7 +176,7 @@ class GT_Layer(MessagePassing):
         trans_out = self.norm(self.drop(self.a_linear(F.gelu(aggr_out))) + node_inp)
         # trans_out = self.out_norm(self.drop(self.out_linear(F.gelu(self.mid_linear(trans_out)))) + trans_out)
         trans_out = self.drop(self.out_linear(F.gelu(trans_out))) + trans_out
-        if self.node_norm:
+        if not self.node_norm:
             trans_out = self.out_norm(trans_out)
         return trans_out
 # +
