@@ -320,7 +320,7 @@ def pre_process_with_summary(d, args):
     new_edge_attr = torch.cat([new_edge_attr, -torch.ones(node_size*2, new_edge_attr.size(1)).long()])
     sd_edge_attr = torch.cat([sd_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
     cn_edge_attr = torch.cat([cn_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
-    # hsd_edge_attr = torch.cat([hsd_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
+    hsd_edge_attr = torch.cat([hsd_edge_attr, -torch.ones(node_size*2, hsd_edge_attr.size(1)).long()])
     comm_edge_attr = torch.cat([comm_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
     alloc_edge_attr = torch.cat([alloc_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
     jaccard_edge_attr = torch.cat([jaccard_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
@@ -360,6 +360,8 @@ d_new = pre_process_with_summary(d, args)
 print(d.edge_attr.size())
 print(d_new.edge_attr.size())
 print(d_new.adamic_edge_attr)
+
+print(d_new)
 
 # ## Old Code
 

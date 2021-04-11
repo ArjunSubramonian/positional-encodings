@@ -89,7 +89,7 @@ class GT(nn.Module):
                 else:
                     # strats[key] = self.drop(self.struc_enc[key](strats[key]))
                     strats[key] = self.struc_enc[key](strats[key])
-            
+        
         for gc in self.gcs:
             node_rep = gc(node_rep, edge_index, strats)
 
