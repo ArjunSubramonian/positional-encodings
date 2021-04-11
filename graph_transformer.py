@@ -56,7 +56,8 @@ class GT(nn.Module):
 
     def forward(self, node_attr, batch_idx, edge_index, strats):
         # strats: edge_attr, cn_edge_attr, sd_edge_attr, lap_x, etc.
-        node_rep = self.drop(self.node_encoder(node_attr))
+        # node_rep = self.drop(self.node_encoder(node_attr))
+        node_rep = self.node_encoder(node_attr)
         if 'lap_x' in strats:
             node_rep += self.lap_linear(strats['lap_x'])
             del strats['lap_x']
@@ -65,25 +66,29 @@ class GT(nn.Module):
             # TODO (low priority): learn different embeddings for different values of k hops
             if self.summary_node:
                 if key == 'ea':
-                    strats[key] = self.drop(self.struc_enc[key](strats[key]))
+                    # strats[key] = self.drop(self.struc_enc[key](strats[key]))
+                    strats[key] = self.struc_enc[key](strats[key])
                 else:
                     attr = strats[key]
                     mask = attr.sum(-1) >= 0
                     
                     if key in ['co', 'al', 'ja', 'ad']: 
-                        attr_emb = self.struc_enc[key](positionalencoding1d(attr[mask], n_hid))
+                        attr_emb = self.struc_enc[key](positionalencoding1d(attr[mask], self.n_hid))
                     else:
                         attr_emb = self.struc_enc[key](attr[mask])
                         
                     mod_attr_emb = torch.empty(attr.size(0), attr_emb.size(1), device=attr.device)
                     mod_attr_emb[mask] = attr_emb
                     mod_attr_emb[~mask] = 0
-                    strats[key] = self.drop(mod_attr_emb)
+                    # strats[key] = self.drop(mod_attr_emb)
+                    strats[key] = mod_attr_emb
             else:
                 if key in ['co', 'al', 'ja', 'ad']:
-                    strats[key] = self.drop(self.struc_enc[key](positionalencoding1d(strats[key], n_hid)))
+                    # strats[key] = self.drop(self.struc_enc[key](positionalencoding1d(strats[key], self.n_hid)))
+                    strats[key] = self.struc_enc[key](positionalencoding1d(strats[key], self.n_hid))
                 else:
-                    strats[key] = self.drop(self.struc_enc[key](strats[key]))
+                    # strats[key] = self.drop(self.struc_enc[key](strats[key]))
+                    strats[key] = self.struc_enc[key](strats[key])
             
         for gc in self.gcs:
             node_rep = gc(node_rep, edge_index, strats)
@@ -152,7 +157,7 @@ class GT_Layer(MessagePassing):
             target_node_vec = node_inp_i
         source_node_vec = node_inp_j 
         for key in strats:
-            source_node_vec += self.struc_enc[key](strats[key])
+            source_node_vec += self.drop(self.struc_enc[key](strats[key]))
         if self.node_norm:
             source_node_vec = self.src_norm(source_node_vec)
                 

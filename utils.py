@@ -17,6 +17,7 @@ from scipy.sparse import csgraph
 
 from scipy.linalg import eigh
 from networkx.linalg.laplacianmatrix import normalized_laplacian_matrix
+import math
 
 
 # -
@@ -208,8 +209,8 @@ def compute_adamic_adar_index(d_nx, edge_index):
 
 def positionalencoding1d(edge_attr, d_model):
     with torch.no_grad():
-        pe = torch.zeros(edge_attr.size(0), d_model)
-        div_term = torch.exp((torch.arange(0, d_model, 2, dtype=torch.float) *
+        pe = torch.zeros(edge_attr.size(0), d_model, device=edge_attr.device)
+        div_term = torch.exp((torch.arange(0, d_model, 2, dtype=torch.float, device=edge_attr.device) *
                              -(math.log(10000.0) / d_model)))
         pe[:, 0::2] = torch.sin(edge_attr * div_term)
         pe[:, 1::2] = torch.cos(edge_attr * div_term)
