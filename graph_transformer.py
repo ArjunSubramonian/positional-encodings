@@ -101,7 +101,7 @@ class GT(nn.Module):
 
 class GT_Layer(MessagePassing):
     def __init__(self, n_hid, n_heads, edge_dim_dict, dropout = 0.2, summary_node = True, \
-                 pre_norm=True, drop_before_softmax=False, **kwargs):
+                 pre_norm=False, drop_before_softmax=False, **kwargs):
         super(GT_Layer, self).__init__(node_dim=0, aggr='add', **kwargs)
 
         self.n_hid         = n_hid
@@ -114,8 +114,12 @@ class GT_Layer(MessagePassing):
         self.k_linear   = nn.Linear(n_hid,   n_hid)
         self.q_linear   = nn.Linear(n_hid,   n_hid)
         self.v_linear   = nn.Linear(n_hid,   n_hid)
+        self.a_linear   = nn.Linear(n_hid,   n_hid)	
+        self.norm       = nn.LayerNorm(n_hid)
+        
         if pre_norm:
-            self.in_norm    = nn.LayerNorm(n_hid, elementwise_affine = False)
+            self.in_norm    = nn.LayerNorm(n_hid, elementwise_affine = False)   
+            
         self.drop       = nn.Dropout(dropout)
         
         self.struc_enc = nn.ModuleDict({
@@ -126,10 +130,11 @@ class GT_Layer(MessagePassing):
         if 'ea' in edge_dim_dict:
             self.struc_enc['ea'] = nn.Linear(n_hid, n_hid, bias=False)
         
-        self.mlp         = nn.Sequential(nn.Linear(n_hid,  2*n_hid), \
-                                         nn.GELU(),
-                                         nn.Dropout(dropout),\
-                                         nn.Linear(2*n_hid,  n_hid))
+#         self.mlp         = nn.Sequential(nn.Linear(n_hid,  2*n_hid), \
+#                                          nn.GELU(),
+#                                          nn.Dropout(dropout),\
+#                                          nn.Linear(2*n_hid,  n_hid))
+        self.out_linear  = nn.Linear(n_hid,  n_hid)
         
         self.pre_norm = pre_norm
         self.out_norm    = nn.LayerNorm(n_hid)
@@ -176,8 +181,12 @@ class GT_Layer(MessagePassing):
 
 
     def update(self, aggr_out, node_inp):
-        trans_out = self.drop(aggr_out) + node_inp
-        trans_out = self.drop(self.mlp(self.out_norm(trans_out))) + trans_out
+        # trans_out = self.drop(aggr_out) + node_inp
+        # trans_out = self.drop(self.mlp(self.out_norm(trans_out))) + trans_out
+        
+        trans_out = self.norm(self.drop(self.a_linear(aggr_out)) + node_inp)
+        trans_out = self.out_norm(self.drop(self.out_linear(F.gelu(trans_out))) + trans_out)
+        
         return trans_out
 # +
 from ogb.utils.features import get_atom_feature_dims, get_bond_feature_dims 
@@ -216,7 +225,7 @@ class ModifiedAtomEncoder(torch.nn.Module):
 
         mod_x_embedding[mask] = x_embedding
         if self.summary_node:
-            mod_x_embedding[~mask] = self.summary_node_embedding
+            mod_x_embedding[~mask] = self.drop(self.summary_node_embedding)
         else:
             mod_x_embedding[~mask] = 0
 
@@ -255,7 +264,7 @@ class ModifiedBondEncoder(torch.nn.Module):
 
         mod_bond_embedding[mask] = bond_embedding
         if self.summary_node:
-            mod_bond_embedding[mask_summary] = self.summary_link_embedding
+            mod_bond_embedding[mask_summary] = self.drop(self.summary_link_embedding)
             mod_bond_embedding[mask_k_hops] = 0
         else:
             mod_bond_embedding[~mask] = 0
