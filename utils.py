@@ -9,7 +9,7 @@ from networkx.algorithms.link_prediction import resource_allocation_index, jacca
 from networkx.algorithms.communicability_alg import communicability
 from torch_geometric.utils.convert import to_networkx
 from torch_geometric.data import Data
-from torch_geometric.utils import to_dense_adj, dense_to_sparse
+from torch_geometric.utils import to_dense_adj, dense_to_sparse, degree
 import torch.nn.functional as F
 
 from sklearn.cluster import spectral_clustering
@@ -334,34 +334,113 @@ def pre_process_with_summary(d, args):
                 adamic_edge_attr=adamic_edge_attr)
 
 
-# +
-from ogb.graphproppred import PygGraphPropPredDataset
-import argparse
-
-dataset = PygGraphPropPredDataset(name='ogbg-molbace')
-d = dataset[0]
-parser = argparse.ArgumentParser(description='PyTorch implementation of relative positional encodings and relation-aware self-attention for graph Transformers')
-args = parser.parse_args("")
-args.k_hop_neighbors = 3
-args.hier_levels = 3
-args.lap_k = 10
-
-d_new = pre_process(d, args)
 # -
 
-print(d_new)
+def basic_pre_process_with_summary(d, args):
+    node_size = d.x.size(0)
+    
+    #     Augment the graph to be K-hop graph
+    dense_orig_adj = to_dense_adj(d.edge_index, batch=d.edge_index.new_zeros(node_size), max_num_nodes=node_size).squeeze(dim=0).long()
+    dense_orig_edge_attr = to_dense_adj(d.edge_index, batch=d.edge_index.new_zeros(node_size), edge_attr=d.edge_attr, max_num_nodes=node_size).squeeze(dim=0).long()
+    pow_dense_orig_adj = dense_orig_adj.clone()
+    new_dense_orig_adj = dense_orig_adj.clone()
+    for k in range(2, args.k_hop_neighbors + 1):
+        pow_dense_orig_adj = torch.mm(pow_dense_orig_adj, dense_orig_adj)
+        new_dense_orig_adj |= F.hardtanh(pow_dense_orig_adj)
+    new_edge_index = dense_to_sparse(new_dense_orig_adj)[0]
+    
+    dense_extra_adj = new_dense_orig_adj - dense_orig_adj
+    dense_orig_edge_attr[dense_extra_adj.bool()] = -2 * torch.ones(dense_orig_edge_attr.size(-1)).long()
+    new_edge_attr = dense_orig_edge_attr[new_edge_index[0], new_edge_index[1]]
+    
+    #     Calculate structural feature by the ORIGNAL graph, add them to new edge set.
+    inv_deg = 1 / degree(d.edge_index[0], node_size)
+    inv_deg[inv_deg == float("inf")] = 0 # eliminate inf's
+    rw_edge_attr = torch.mm(dense_orig_adj.float(), torch.diag(inv_deg))
+    pow_rw_edge_attr = rw_edge_attr.clone()
+    new_rw_edge_attr = rw_edge_attr.clone()
+    for k in range(2, args.k_hop_neighbors + 1):
+        pow_rw_edge_attr = torch.mm(pow_rw_edge_attr, rw_edge_attr)
+        new_rw_edge_attr += pow_rw_edge_attr
+    rw_edge_attr = dense_to_sparse(new_rw_edge_attr)[1]
+    
+    assert new_edge_attr.size(0) == rw_edge_attr.size(0), inv_deg
+      
+    # add summary node that connects to all the other nodes.
+    # append row of -1's as raw features of summary node (modified AtomEncoder will specially handle all -1's)
+    d.x = torch.cat([d.x, -torch.ones(1, d.x.size(1)).long()])
+    # okay to add self-loop to summary node
+    # don't need to coalesce
+    # append columns to edge_index to connect summary node to all other nodes
+    summary_src = node_size * torch.ones(1, node_size).long()
+    summary_tgt = torch.arange(node_size).reshape(1, -1).long()
+    summary_edges = torch.cat([summary_src, summary_tgt])
+    summary_edges = torch.cat([summary_edges, summary_edges[torch.LongTensor([1,0])]], dim=1) 
+    
+    new_edge_index = torch.cat([new_edge_index, summary_edges], dim=1)
+    # append rows of -1's as raw features of all new edges (modified BondEncoder will specially handle all -1's)
+    new_edge_attr = torch.cat([new_edge_attr, -torch.ones(node_size*2, new_edge_attr.size(1)).long()])
+    rw_edge_attr = torch.cat([rw_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
+    
+    return Data(x=d.x, y=d.y, edge_index=new_edge_index, orig_edge_index=d.edge_index, edge_attr=new_edge_attr, \
+         orig_edge_attr=d.edge_attr, rw_edge_attr=rw_edge_attr)
 
-print(d.edge_attr.size())
-print(d_new.edge_attr.size())
 
-print(d_new.alloc_edge_attr)
+# +
+import networkx as nx
 
-d_new = pre_process_with_summary(d, args)
-print(d.edge_attr.size())
-print(d_new.edge_attr.size())
-print(d_new.adamic_edge_attr)
+'''
+Graph drawing utils
+'''
+element_color_list = ['red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'silver']
+atom_color_map = {5:'silver', 6:'red', 7: 'blue', 15: 'yellow', 16: 'green'}
 
-print(d_new)
+def get_node_color_list(g, element_color_list):
+    node_color_list = []
+    for n in g.nodes:
+        idx = g.nodes[n]['element_id']
+        idx = min(len(element_color_list) - 1, idx)
+        node_color_list += [element_color_list[idx]]
+    return node_color_list
+
+def get_atom_color_list(g, atom_color_map):
+    node_color_list = []
+    for n in g.nodes:
+        idx = g.nodes[n]['x'][0]
+        node_color_list += [atom_color_map.get(idx, "black")]
+
+    return node_color_list
+
+def draw_with_color(g, ax=None, labels='none'):
+    node_color_list = get_node_color_list(g, element_color_list)
+    if labels == 'none':
+        nx.draw(g, ax=ax, node_color=node_color_list)                    
+    elif labels == 'node_id':
+        nx.draw(g, ax=ax, node_color=node_color_list, with_labels=True)    
+    else:
+        nx.draw(g, ax=ax, node_color=node_color_list, labels=nx.get_node_attributes(g, labels))   
+        
+def molecule_draw_with_color(g, ax=None, labels='none'):
+    node_color_list = get_atom_color_list(g, atom_color_map)
+    if labels == 'none':
+        nx.draw(g, ax=ax, node_color=node_color_list)                    
+    elif labels == 'node_id':
+        nx.draw(g, ax=ax, node_color=node_color_list, with_labels=True)    
+    else:
+        nx.draw(g, ax=ax, node_color=node_color_list, labels=nx.get_node_attributes(g, labels))   
+
+# +
+# from ogb.graphproppred import PygGraphPropPredDataset
+# import argparse
+
+# dataset = PygGraphPropPredDataset(name='ogbg-molhiv')
+# parser = argparse.ArgumentParser(description='PyTorch implementation of relative positional encodings and relation-aware self-attention for graph Transformers')
+# args = parser.parse_args("")
+# args.k_hop_neighbors = 3
+
+# for d in dataset:
+#     d_new = basic_pre_process_with_summary(d, args)
+# -
 
 # ## Old Code
 

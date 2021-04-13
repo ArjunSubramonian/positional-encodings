@@ -61,7 +61,7 @@ class GT(nn.Module):
         if 'lap_x' in strats:
             node_rep += self.drop(self.lap_linear(strats['lap_x']))
             del strats['lap_x']
-            
+        
         for key in strats:
             # TODO (low priority): learn different embeddings for different values of k hops
             if self.summary_node:
@@ -72,7 +72,7 @@ class GT(nn.Module):
                     attr = strats[key]
                     mask = attr.sum(-1) >= 0
                     
-                    if key in ['co', 'al', 'ja', 'ad']: 
+                    if key in ['co', 'al', 'ja', 'ad', 'rw']: 
                         attr_emb = self.struc_enc[key](positionalencoding1d(attr[mask], self.n_hid))
                     else:
                         attr_emb = self.struc_enc[key](attr[mask])
@@ -83,7 +83,7 @@ class GT(nn.Module):
                     # strats[key] = self.drop(mod_attr_emb)
                     strats[key] = mod_attr_emb
             else:
-                if key in ['co', 'al', 'ja', 'ad']:
+                if key in ['co', 'al', 'ja', 'ad', 'rw']:
                     # strats[key] = self.drop(self.struc_enc[key](positionalencoding1d(strats[key], self.n_hid)))
                     strats[key] = self.struc_enc[key](positionalencoding1d(strats[key], self.n_hid))
                 else:
