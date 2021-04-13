@@ -356,15 +356,17 @@ def basic_pre_process_with_summary(d, args):
     #     Calculate structural feature by the ORIGNAL graph, add them to new edge set.
     inv_deg = 1 / degree(d.edge_index[0], node_size)
     inv_deg[inv_deg == float("inf")] = 0 # eliminate inf's
+    pow_rw_edge_attr = torch.eye(node_size)
     rw_edge_attr = torch.mm(dense_orig_adj.float(), torch.diag(inv_deg))
-    pow_rw_edge_attr = rw_edge_attr.clone()
-    new_rw_edge_attr = rw_edge_attr.clone()
-    for k in range(2, args.k_hop_neighbors + 1):
+    rw_edge_attrs = {}
+    for k in range(1, args.k_hop_neighbors + 1):
         pow_rw_edge_attr = torch.mm(pow_rw_edge_attr, rw_edge_attr)
-        new_rw_edge_attr += pow_rw_edge_attr
-    rw_edge_attr = dense_to_sparse(new_rw_edge_attr)[1]
+        dense_extra_adj = new_dense_orig_adj - torch.where(pow_rw_edge_attr == 0, pow_rw_edge_attr, torch.tensor(1.0)).long()
+        pow_rw_edge_attr_clone = pow_rw_edge_attr.clone()
+        pow_rw_edge_attr_clone[dense_extra_adj.bool()] = -1.0
+        rw_edge_attrs['rw_edge_attr_' + str(k)] = dense_to_sparse(pow_rw_edge_attr_clone)[1]
     
-    assert new_edge_attr.size(0) == rw_edge_attr.size(0), inv_deg
+    assert new_edge_attr.size(0) == rw_edge_attrs['rw_edge_attr_1'].size(0), inv_deg
       
     # add summary node that connects to all the other nodes.
     # append row of -1's as raw features of summary node (modified AtomEncoder will specially handle all -1's)
@@ -380,10 +382,11 @@ def basic_pre_process_with_summary(d, args):
     new_edge_index = torch.cat([new_edge_index, summary_edges], dim=1)
     # append rows of -1's as raw features of all new edges (modified BondEncoder will specially handle all -1's)
     new_edge_attr = torch.cat([new_edge_attr, -torch.ones(node_size*2, new_edge_attr.size(1)).long()])
-    rw_edge_attr = torch.cat([rw_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
+    for k in rw_edge_attrs:
+        rw_edge_attrs[k] = torch.cat([rw_edge_attrs[k], -torch.ones(node_size*2).long()]).view(-1, 1)
     
     return Data(x=d.x, y=d.y, edge_index=new_edge_index, orig_edge_index=d.edge_index, edge_attr=new_edge_attr, \
-         orig_edge_attr=d.edge_attr, rw_edge_attr=rw_edge_attr)
+         orig_edge_attr=d.edge_attr, **rw_edge_attrs)
 
 
 # +
@@ -438,8 +441,12 @@ def molecule_draw_with_color(g, ax=None, labels='none'):
 # args = parser.parse_args("")
 # args.k_hop_neighbors = 3
 
-# for d in dataset:
+# for d in dataset[:1]:
 #     d_new = basic_pre_process_with_summary(d, args)
+#     print(d_new)
+#     print(d_new.rw_edge_attr_1)
+#     print(d_new.rw_edge_attr_2)
+#     print(d_new.rw_edge_attr_3)
 # -
 
 # ## Old Code

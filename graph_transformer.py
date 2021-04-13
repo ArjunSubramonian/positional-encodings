@@ -72,7 +72,7 @@ class GT(nn.Module):
                     attr = strats[key]
                     mask = attr.sum(-1) >= 0
                     
-                    if key in ['co', 'al', 'ja', 'ad', 'rw']: 
+                    if key in ['co', 'al', 'ja', 'ad'] or key.startswith('rw'): 
                         attr_emb = self.struc_enc[key](positionalencoding1d(attr[mask], self.n_hid))
                     else:
                         attr_emb = self.struc_enc[key](attr[mask])
@@ -83,7 +83,7 @@ class GT(nn.Module):
                     # strats[key] = self.drop(mod_attr_emb)
                     strats[key] = mod_attr_emb
             else:
-                if key in ['co', 'al', 'ja', 'ad', 'rw']:
+                if key in ['co', 'al', 'ja', 'ad'] or key.startswith('rw'):
                     # strats[key] = self.drop(self.struc_enc[key](positionalencoding1d(strats[key], self.n_hid)))
                     strats[key] = self.struc_enc[key](positionalencoding1d(strats[key], self.n_hid))
                 else:
