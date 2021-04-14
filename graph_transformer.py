@@ -126,7 +126,8 @@ class GT_Layer(MessagePassing):
              key : nn.Linear(n_hid, n_hid, bias=False) for key in edge_dim_dict['disc']
         })
         for key in edge_dim_dict['cont']:
-            self.struc_enc[key] = nn.Linear(n_hid, n_hid, bias=False)
+            if key.startswith('rw') and 'rw' not in self.struc_enc:
+                self.struc_enc['rw'] = nn.Linear(n_hid, n_hid, bias=False)
         if 'ea' in edge_dim_dict:
             self.struc_enc['ea'] = nn.Linear(n_hid, n_hid, bias=False)
         
@@ -159,7 +160,10 @@ class GT_Layer(MessagePassing):
             target_node_vec = node_inp_i
         source_node_vec = node_inp_j 
         for key in strats:
-            source_node_vec += self.drop(self.struc_enc[key](strats[key]))
+            if key.startswith('rw'):
+                source_node_vec += self.drop(self.struc_enc['rw'](strats[key]))
+            else:
+                source_node_vec += self.drop(self.struc_enc[key](strats[key]))
             # source_node_vec += self.struc_enc[key](strats[key])
         if self.pre_norm:
             source_node_vec = self.in_norm(source_node_vec)
