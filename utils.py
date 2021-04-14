@@ -336,17 +336,141 @@ def pre_process_with_summary(d, args):
 
 # -
 
-def basic_pre_process_with_summary(d, args):
+def fin_sum_pre_process_with_summary(d, args):
+    node_size = d.x.size(0)
+
+    #     Augment the graph to be K-hop graph
+    dense_orig_adj = to_dense_adj(d.edge_index, batch=d.edge_index.new_zeros(node_size), max_num_nodes=node_size).squeeze(dim=0).long()
+    dense_orig_edge_attr = to_dense_adj(d.edge_index, batch=d.edge_index.new_zeros(node_size), edge_attr=d.edge_attr, max_num_nodes=node_size).squeeze(dim=0).long()
+    
+    if args.k_hop:
+        pow_dense_orig_adj = dense_orig_adj.clone()
+        new_dense_orig_adj = dense_orig_adj.clone()
+        for k in range(2, args.k_hop_neighbors + 1):
+            pow_dense_orig_adj = torch.mm(pow_dense_orig_adj, dense_orig_adj)
+            new_dense_orig_adj |= F.hardtanh(pow_dense_orig_adj)
+    else:
+        new_dense_orig_adj = torch.ones((node_size, node_size)).long()
+    new_edge_index = dense_to_sparse(new_dense_orig_adj)[0]
+
+    dense_extra_adj = new_dense_orig_adj - dense_orig_adj
+    dense_orig_edge_attr[dense_extra_adj.bool()] = -2 * torch.ones(dense_orig_edge_attr.size(-1)).long()
+    new_edge_attr = dense_orig_edge_attr[new_edge_index[0], new_edge_index[1]]
+
+    #     Calculate structural feature by the ORIGNAL graph, add them to new edge set.
+    basis_edge_attrs = {}
+    inv_deg = 1 / torch.sqrt(degree(d.edge_index[0], node_size))
+    inv_deg[inv_deg == float("inf")] = 0 # eliminate inf's
+    basis_edge_attrs['sym_edge_attr'] = torch.mm(torch.diag(inv_deg), torch.mm(dense_orig_adj.float(), torch.diag(inv_deg)))
+    
+    inv_deg = 1 / degree(d.edge_index[0], node_size)
+    inv_deg[inv_deg == float("inf")] = 0 # eliminate inf's
+    basis_edge_attrs['rw_edge_attr'] = torch.mm(dense_orig_adj.float(), torch.diag(inv_deg))
+    
+    for key, b_edge_attr in basis_edge_attrs.items():
+        pow_b_edge_attr = b_edge_attr.clone()
+        new_b_edge_attr = b_edge_attr.clone()
+        for k in range(2, args.k_hop_neighbors + 1):
+            pow_b_edge_attr = torch.mm(pow_b_edge_attr, b_edge_attr)
+            new_b_edge_attr += pow_b_edge_attr
+        
+        if not args.k_hop:
+            dense_extra_adj = new_dense_orig_adj - torch.where(new_b_edge_attr == 0, new_b_edge_attr, torch.tensor(1.0)).long()
+            new_b_edge_attr[dense_extra_adj.bool()] = -1.0
+            
+        basis_edge_attrs[key] = dense_to_sparse(new_b_edge_attr)[1]
+        assert new_edge_attr.size(0) == basis_edge_attrs[key].size(0)
+
+    # add summary node that connects to all the other nodes.
+    # append row of -1's as raw features of summary node (modified AtomEncoder will specially handle all -1's)
+    d.x = torch.cat([d.x, -torch.ones(1, d.x.size(1)).long()])
+    # okay to add self-loop to summary node
+    # don't need to coalesce
+    # append columns to edge_index to connect summary node to all other nodes
+    summary_src = node_size * torch.ones(1, node_size).long()
+    summary_tgt = torch.arange(node_size).reshape(1, -1).long()
+    summary_edges = torch.cat([summary_src, summary_tgt])
+    summary_edges = torch.cat([summary_edges, summary_edges[torch.LongTensor([1,0])]], dim=1) 
+
+    new_edge_index = torch.cat([new_edge_index, summary_edges], dim=1)
+    # append rows of -1's as raw features of all new edges (modified BondEncoder will specially handle all -1's)
+    new_edge_attr = torch.cat([new_edge_attr, -torch.ones(node_size*2, new_edge_attr.size(1)).long()])
+    for k, b_edge_attr in basis_edge_attrs.items():
+        basis_edge_attrs[k] = torch.cat([b_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
+
+    return Data(x=d.x, y=d.y, edge_index=new_edge_index, orig_edge_index=d.edge_index, edge_attr=new_edge_attr, \
+         orig_edge_attr=d.edge_attr, **basis_edge_attrs)
+
+
+def inf_sum_pre_process_with_summary(d, args):
+    node_size = d.x.size(0)
+
+    #     Augment the graph to be complete graph
+    dense_orig_adj = to_dense_adj(d.edge_index, batch=d.edge_index.new_zeros(node_size), max_num_nodes=node_size).squeeze(dim=0).long()
+    dense_orig_edge_attr = to_dense_adj(d.edge_index, batch=d.edge_index.new_zeros(node_size), edge_attr=d.edge_attr, max_num_nodes=node_size).squeeze(dim=0).long()
+    new_dense_orig_adj = torch.ones((node_size, node_size)).long()
+    new_edge_index = dense_to_sparse(new_dense_orig_adj)[0]
+
+    dense_extra_adj = new_dense_orig_adj - dense_orig_adj
+    dense_orig_edge_attr[dense_extra_adj.bool()] = -2 * torch.ones(dense_orig_edge_attr.size(-1)).long()
+    new_edge_attr = dense_orig_edge_attr[new_edge_index[0], new_edge_index[1]]
+
+    #     Calculate structural feature by the ORIGNAL graph, add them to new edge set.
+    basis_edge_attrs = {}
+    inv_deg = 1 / torch.sqrt(degree(d.edge_index[0], node_size))
+    inv_deg[inv_deg == float("inf")] = 0 # eliminate inf's
+    basis_edge_attrs['sym_edge_attr'] = torch.mm(torch.diag(inv_deg), torch.mm(dense_orig_adj.float(), torch.diag(inv_deg)))
+    
+    inv_deg = 1 / degree(d.edge_index[0], node_size)
+    inv_deg[inv_deg == float("inf")] = 0 # eliminate inf's
+    basis_edge_attrs['rw_edge_attr'] = torch.mm(dense_orig_adj.float(), torch.diag(inv_deg))
+        
+    for k, b_edge_attr in basis_edge_attrs.items():
+        b_edge_attr /= torch.norm(b_edge_attr) + 1e-3
+        new_b_edge_attr = torch.inverse(torch.eye(node_size) - b_edge_attr)
+    
+        dense_extra_adj = new_dense_orig_adj - torch.where(new_b_edge_attr == 0, new_b_edge_attr, torch.tensor(1.0)).long()
+        new_b_edge_attr[dense_extra_adj.bool()] = -1.0
+        basis_edge_attrs[k] = dense_to_sparse(new_b_edge_attr)[1]
+
+        assert new_edge_attr.size(0) == basis_edge_attrs[k].size(0)
+
+    # add summary node that connects to all the other nodes.
+    # append row of -1's as raw features of summary node (modified AtomEncoder will specially handle all -1's)
+    d.x = torch.cat([d.x, -torch.ones(1, d.x.size(1)).long()])
+    # okay to add self-loop to summary node
+    # don't need to coalesce
+    # append columns to edge_index to connect summary node to all other nodes
+    summary_src = node_size * torch.ones(1, node_size).long()
+    summary_tgt = torch.arange(node_size).reshape(1, -1).long()
+    summary_edges = torch.cat([summary_src, summary_tgt])
+    summary_edges = torch.cat([summary_edges, summary_edges[torch.LongTensor([1,0])]], dim=1) 
+
+    new_edge_index = torch.cat([new_edge_index, summary_edges], dim=1)
+    # append rows of -1's as raw features of all new edges (modified BondEncoder will specially handle all -1's)
+    new_edge_attr = torch.cat([new_edge_attr, -torch.ones(node_size*2, new_edge_attr.size(1)).long()])
+    for k, b_edge_attr in basis_edge_attrs.items():
+        basis_edge_attrs[k] = torch.cat([b_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
+
+    return Data(x=d.x, y=d.y, edge_index=new_edge_index, orig_edge_index=d.edge_index, edge_attr=new_edge_attr, \
+         orig_edge_attr=d.edge_attr, **basis_edge_attrs)
+
+
+def concat_pre_process_with_summary(d, args):
     node_size = d.x.size(0)
     
     #     Augment the graph to be K-hop graph
     dense_orig_adj = to_dense_adj(d.edge_index, batch=d.edge_index.new_zeros(node_size), max_num_nodes=node_size).squeeze(dim=0).long()
     dense_orig_edge_attr = to_dense_adj(d.edge_index, batch=d.edge_index.new_zeros(node_size), edge_attr=d.edge_attr, max_num_nodes=node_size).squeeze(dim=0).long()
-    pow_dense_orig_adj = dense_orig_adj.clone()
-    new_dense_orig_adj = dense_orig_adj.clone()
-    for k in range(2, args.k_hop_neighbors + 1):
-        pow_dense_orig_adj = torch.mm(pow_dense_orig_adj, dense_orig_adj)
-        new_dense_orig_adj |= F.hardtanh(pow_dense_orig_adj)
+    
+    if args.k_hop:
+        pow_dense_orig_adj = dense_orig_adj.clone()
+        new_dense_orig_adj = dense_orig_adj.clone()
+        for k in range(2, args.k_hop_neighbors + 1):
+            pow_dense_orig_adj = torch.mm(pow_dense_orig_adj, dense_orig_adj)
+            new_dense_orig_adj |= F.hardtanh(pow_dense_orig_adj)
+    else:
+        new_dense_orig_adj = torch.ones((node_size, node_size)).long()
     new_edge_index = dense_to_sparse(new_dense_orig_adj)[0]
     
     dense_extra_adj = new_dense_orig_adj - dense_orig_adj
@@ -354,19 +478,27 @@ def basic_pre_process_with_summary(d, args):
     new_edge_attr = dense_orig_edge_attr[new_edge_index[0], new_edge_index[1]]
     
     #     Calculate structural feature by the ORIGNAL graph, add them to new edge set.
+    basis_edge_attrs = {}
+    inv_deg = 1 / torch.sqrt(degree(d.edge_index[0], node_size))
+    inv_deg[inv_deg == float("inf")] = 0 # eliminate inf's
+    basis_edge_attrs['sym_edge_attr'] = torch.mm(torch.diag(inv_deg), torch.mm(dense_orig_adj.float(), torch.diag(inv_deg)))
+    
     inv_deg = 1 / degree(d.edge_index[0], node_size)
     inv_deg[inv_deg == float("inf")] = 0 # eliminate inf's
-    pow_rw_edge_attr = torch.eye(node_size)
-    rw_edge_attr = torch.mm(dense_orig_adj.float(), torch.diag(inv_deg))
-    rw_edge_attrs = {}
-    for k in range(1, args.k_hop_neighbors + 1):
-        pow_rw_edge_attr = torch.mm(pow_rw_edge_attr, rw_edge_attr)
-        dense_extra_adj = new_dense_orig_adj - torch.where(pow_rw_edge_attr == 0, pow_rw_edge_attr, torch.tensor(1.0)).long()
-        pow_rw_edge_attr_clone = pow_rw_edge_attr.clone()
-        pow_rw_edge_attr_clone[dense_extra_adj.bool()] = -1.0
-        rw_edge_attrs['rw_edge_attr_' + str(k)] = dense_to_sparse(pow_rw_edge_attr_clone)[1]
+    basis_edge_attrs['rw_edge_attr'] = torch.mm(dense_orig_adj.float(), torch.diag(inv_deg))
     
-    assert new_edge_attr.size(0) == rw_edge_attrs['rw_edge_attr_1'].size(0), inv_deg
+    for key, b_edge_attr in basis_edge_attrs.items():
+        pow_b_edge_attr = torch.eye(node_size)
+        b_edge_attrs = {}
+        for k in range(1, args.k_hop_neighbors + 1):
+            pow_b_edge_attr = torch.mm(pow_b_edge_attr, b_edge_attr)
+            dense_extra_adj = new_dense_orig_adj - torch.where(pow_b_edge_attr == 0, pow_b_edge_attr, torch.tensor(1.0)).long()
+            pow_b_edge_attr_clone = pow_b_edge_attr.clone()
+            pow_b_edge_attr_clone[dense_extra_adj.bool()] = -1.0
+            b_edge_attrs[key + '_' + str(k)] = dense_to_sparse(pow_b_edge_attr_clone)[1]
+        
+        basis_edge_attrs[key] = b_edge_attrs
+        assert new_edge_attr.size(0) == b_edge_attrs[key + '_1'].size(0)
       
     # add summary node that connects to all the other nodes.
     # append row of -1's as raw features of summary node (modified AtomEncoder will specially handle all -1's)
@@ -382,11 +514,13 @@ def basic_pre_process_with_summary(d, args):
     new_edge_index = torch.cat([new_edge_index, summary_edges], dim=1)
     # append rows of -1's as raw features of all new edges (modified BondEncoder will specially handle all -1's)
     new_edge_attr = torch.cat([new_edge_attr, -torch.ones(node_size*2, new_edge_attr.size(1)).long()])
-    for k in rw_edge_attrs:
-        rw_edge_attrs[k] = torch.cat([rw_edge_attrs[k], -torch.ones(node_size*2).long()]).view(-1, 1)
+    kwargs = {}
+    for _, b_edge_attrs in basis_edge_attrs.items():
+        for key, b_edge_attr in b_edge_attrs.items():
+            kwargs[key] = torch.cat([b_edge_attr, -torch.ones(node_size*2).long()]).view(-1, 1)
     
     return Data(x=d.x, y=d.y, edge_index=new_edge_index, orig_edge_index=d.edge_index, edge_attr=new_edge_attr, \
-         orig_edge_attr=d.edge_attr, **rw_edge_attrs)
+         orig_edge_attr=d.edge_attr, **kwargs)
 
 
 # +
@@ -442,11 +576,26 @@ def molecule_draw_with_color(g, ax=None, labels='none'):
 # args.k_hop_neighbors = 3
 
 # for d in dataset[:1]:
-#     d_new = basic_pre_process_with_summary(d, args)
+    
+#     args.k_hop = True
+#     d_new = concat_pre_process_with_summary(d, args)
 #     print(d_new)
-#     print(d_new.rw_edge_attr_1)
-#     print(d_new.rw_edge_attr_2)
-#     print(d_new.rw_edge_attr_3)
+
+#     d_new = inf_sum_pre_process_with_summary(d, args)
+#     print(d_new)
+    
+#     d_new = fin_sum_pre_process_with_summary(d, args)
+#     print(d_new)
+    
+#     args.k_hop = False
+#     d_new = concat_pre_process_with_summary(d, args)
+#     print(d_new)
+
+#     d_new = inf_sum_pre_process_with_summary(d, args)
+#     print(d_new)
+    
+#     d_new = fin_sum_pre_process_with_summary(d, args)
+#     print(d_new)
 # -
 
 # ## Old Code
