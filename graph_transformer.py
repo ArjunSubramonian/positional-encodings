@@ -72,7 +72,7 @@ class GT(nn.Module):
                     attr = strats[key]
                     mask = attr.sum(-1) >= 0
                     
-                    if key in ['co', 'al', 'ja', 'ad'] or key.startswith('rw'): 
+                    if key in ['co', 'al', 'ja', 'ad'] or key.startswith('rw') or key.startswith('sym'): 
                         attr_emb = self.struc_enc[key](positionalencoding1d(attr[mask], self.n_hid))
                     else:
                         attr_emb = self.struc_enc[key](attr[mask])
@@ -83,7 +83,7 @@ class GT(nn.Module):
                     # strats[key] = self.drop(mod_attr_emb)
                     strats[key] = mod_attr_emb
             else:
-                if key in ['co', 'al', 'ja', 'ad'] or key.startswith('rw'):
+                if key in ['co', 'al', 'ja', 'ad'] or key.startswith('rw') or key.startswith('sym'):
                     # strats[key] = self.drop(self.struc_enc[key](positionalencoding1d(strats[key], self.n_hid)))
                     strats[key] = self.struc_enc[key](positionalencoding1d(strats[key], self.n_hid))
                 else:
@@ -95,8 +95,8 @@ class GT(nn.Module):
 
         if self.summary_node:
             # change to use virtual node
-            return self.out(node_rep[node_attr.sum(dim=1) < 0])
-        return self.out(global_mean_pool(node_rep, batch_idx))
+            return self.out(node_rep[node_attr.sum(dim=1) < 0]), node_rep
+        return self.out(global_mean_pool(node_rep, batch_idx)), node_rep
         
 
 class GT_Layer(MessagePassing):
@@ -128,6 +128,10 @@ class GT_Layer(MessagePassing):
         for key in edge_dim_dict['cont']:
             if key.startswith('rw') and 'rw' not in self.struc_enc:
                 self.struc_enc['rw'] = nn.Linear(n_hid, n_hid, bias=False)
+            elif key.startswith('sym') and 'sym' not in self.struc_enc:
+                self.struc_enc['sym'] = nn.Linear(n_hid, n_hid, bias=False)
+#         for key in edge_dim_dict['cont']:
+#             self.struc_enc[key] = nn.Linear(n_hid, n_hid, bias=False)
         if 'ea' in edge_dim_dict:
             self.struc_enc['ea'] = nn.Linear(n_hid, n_hid, bias=False)
         
@@ -162,8 +166,11 @@ class GT_Layer(MessagePassing):
         for key in strats:
             if key.startswith('rw'):
                 source_node_vec += self.drop(self.struc_enc['rw'](strats[key]))
+            elif key.startswith('sym'):
+                source_node_vec += self.drop(self.struc_enc['sym'](strats[key]))
             else:
                 source_node_vec += self.drop(self.struc_enc[key](strats[key]))
+            # source_node_vec += self.drop(self.struc_enc[key](strats[key]))
             # source_node_vec += self.struc_enc[key](strats[key])
         if self.pre_norm:
             source_node_vec = self.in_norm(source_node_vec)
