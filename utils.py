@@ -11,6 +11,7 @@ from torch_geometric.utils.convert import to_networkx
 from torch_geometric.data import Data
 from torch_geometric.utils import to_dense_adj, dense_to_sparse, degree
 import torch.nn.functional as F
+from networkx.algorithms.simple_paths import all_simple_paths
 
 from sklearn.cluster import spectral_clustering
 from scipy.sparse import csgraph
@@ -33,6 +34,22 @@ def get_optimizer(model: nn.Module, learning_rate: float = 1e-4, adam_eps: float
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=learning_rate, eps=adam_eps)
     return optimizer
+
+
+def longest_simple_paths(d, num_nodes):
+    d_nx = to_networkx(d, to_undirected=True)
+    edge_attr = []
+    for s in range(num_nodes):
+        edge_attr.append([])
+        for t in range(num_nodes):
+            p = list(all_simple_paths(d_nx, s, t))
+            if len(p) > 0:
+                max_len = len(max(p, key=len))
+                edge_attr[-1] += [max_len - 1]
+            else:
+                edge_attr[-1] += [0]
+        
+    return torch.tensor(edge_attr)
 
 
 # +

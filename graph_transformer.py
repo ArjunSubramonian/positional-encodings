@@ -40,6 +40,7 @@ class GT(nn.Module):
         self.gcs       = nn.ModuleList([GT_Layer(n_hid, n_heads, edge_dim_dict, dropout, summary_node)\
                                       for _ in range(n_layers)])
         self.out       = nn.Linear(n_hid, n_out)
+        # self.out       = nn.Sequential(nn.Linear(n_hid, n_out), nn.ReLU(), nn.Linear(n_out, n_out))
         self.summary_node = summary_node
         
         self.struc_enc = nn.ModuleDict({
@@ -48,18 +49,20 @@ class GT(nn.Module):
         })
         for key in edge_dim_dict['cont']:
             self.struc_enc[key] = nn.Linear(edge_dim_dict['cont'][key], n_hid, bias=False)
+            # self.struc_enc[key] = nn.Sequential(nn.Linear(edge_dim_dict['cont'][key], n_hid), nn.ReLU(), nn.Linear(n_hid, n_hid))
         if 'ea' in edge_dim_dict:
             self.struc_enc['ea'] = ModifiedBondEncoder(emb_dim=n_hid, dropout = dropout, summary_node = summary_node)
         
         if lap_k is not None:
-            self.lap_linear = nn.Linear(lap_k, n_hid, bias=False)
+            self.lap_enc = nn.Linear(lap_k, n_hid, bias=False)
+            # self.lap_enc = nn.Sequential(nn.Linear(lap_k, n_hid), nn.ReLU(), nn.Linear(n_hid, n_hid))
 
     def forward(self, node_attr, batch_idx, edge_index, strats):
         # strats: edge_attr, cn_edge_attr, sd_edge_attr, lap_x, etc.
         # node_rep = self.drop(self.node_encoder(node_attr))
         node_rep = self.node_encoder(node_attr)
         if 'lap_x' in strats:
-            node_rep += self.drop(self.lap_linear(strats['lap_x']))
+            node_rep += self.drop(self.lap_enc(strats['lap_x']))
             del strats['lap_x']
         
         for key in strats:
@@ -122,17 +125,24 @@ class GT_Layer(MessagePassing):
             
         self.drop       = nn.Dropout(dropout)
         
+        # TODO (potentially?): remove bias term from all Linear parameters below
         self.struc_enc = nn.ModuleDict({
-             key : nn.Linear(n_hid, n_hid, bias=False) for key in edge_dim_dict['disc']
+             # key : nn.Linear(n_hid, n_hid) for key in edge_dim_dict['disc']
+            key : nn.Linear(n_hid, n_hid, bias=False) for key in edge_dim_dict['disc']
         })
         for key in edge_dim_dict['cont']:
             if key.startswith('rw') and 'rw' not in self.struc_enc:
+                # self.struc_enc['rw'] = nn.Linear(n_hid, n_hid)
                 self.struc_enc['rw'] = nn.Linear(n_hid, n_hid, bias=False)
             elif key.startswith('sym') and 'sym' not in self.struc_enc:
+                # self.struc_enc['sym'] = nn.Linear(n_hid, n_hid)
                 self.struc_enc['sym'] = nn.Linear(n_hid, n_hid, bias=False)
-#         for key in edge_dim_dict['cont']:
-#             self.struc_enc[key] = nn.Linear(n_hid, n_hid, bias=False)
+            else:
+                # self.struc_enc[key] = nn.Linear(n_hid, n_hid)
+                self.struc_enc[key] = nn.Linear(n_hid, n_hid, bias=False)
+                
         if 'ea' in edge_dim_dict:
+            # self.struc_enc['ea'] = nn.Linear(n_hid, n_hid)
             self.struc_enc['ea'] = nn.Linear(n_hid, n_hid, bias=False)
         
 #         self.mlp         = nn.Sequential(nn.Linear(n_hid,  2*n_hid), \
