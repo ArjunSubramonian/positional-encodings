@@ -56,6 +56,8 @@ class GT(nn.Module):
         if lap_k is not None:
             self.lap_enc = nn.Linear(lap_k, n_hid, bias=False)
             # self.lap_enc = nn.Sequential(nn.Linear(lap_k, n_hid), nn.ReLU(), nn.Linear(n_hid, n_hid))
+        
+        self.temp = torch.nn.Linear(1, 1)
 
     def forward(self, node_attr, batch_idx, edge_index, strats):
         # strats: edge_attr, cn_edge_attr, sd_edge_attr, lap_x, etc.
